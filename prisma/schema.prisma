@@ -1,0 +1,49 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+model Project {
+  project_id String   @id @default(cuid())
+  status     String   @default("DRAFT")
+  topic_name String
+  analysis   String? // JSON stored as string for SQLite compatibility
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  shots Shot[]
+
+  @@map("projects")
+}
+
+model Shot {
+  shot_id                 String  @id @default(cuid())
+  project_id              String
+  number                  Int
+  text                    String
+  duration_seconds        Float
+  image_prompt            String?
+  generated_image_url     String?
+  video_prompt            String?
+  generated_video_url     String?
+  voiceover_prompt        String?
+  generated_voiceover_url String?
+
+  // Pipeline audio/video/subtitle sync fields
+  voiceover_duration_seconds Float?
+  word_timestamps            String? // JSON string
+  caption_cues               String? // JSON string
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  project Project @relation(fields: [project_id], references: [project_id], onDelete: Cascade)
+
+  @@map("shots")
+}

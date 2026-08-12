@@ -31,7 +31,18 @@ yarn-error.log*
 .pnpm-debug.log*
 
 # env files (can opt-in for committing if needed)
-.env*
+.env*.local
+.env.local
+
+# sqlite & dev database
+*.db
+*.db-journal
+/prisma/dev.db*
+dev.db
+
+# generated local media assets
+/public/generated*
+/public/temp*
 
 # vercel
 .vercel
