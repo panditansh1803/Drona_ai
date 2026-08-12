@@ -35,7 +35,7 @@ export async function generateShotImage(prompt: string): Promise<string> {
       body: JSON.stringify({
         prompt,
         size: "1024x1024",
-        quality: "standard",
+        quality: "medium",
       }),
     }
   );
