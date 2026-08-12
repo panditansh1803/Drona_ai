@@ -1,11 +1,8 @@
-import { GoogleGenAI } from "@google/genai";
 import path from "path";
-import os from "os";
 import fs from "fs";
 import { exec } from "child_process";
 import { promisify } from "util";
 import { saveGeneratedFile } from "@/src/lib/storage/local";
-import { renderStillToVideo } from "@/src/lib/video/still-to-video";
 
 const execAsync = promisify(exec);
 
@@ -16,55 +13,41 @@ export class VideoGenError extends Error {
   }
 }
 
-// Global running cost total for Veo generation calls
-let runningPipelineVeoCost = 0;
-
-export function getRunningPipelineVeoCost(): number {
-  return runningPipelineVeoCost;
-}
-
-export function resetRunningPipelineVeoCost(): void {
-  runningPipelineVeoCost = 0;
-}
-
-/**
- * Helper to convert a local image path or remote URL to base64 inline image object for Veo.
- */
-async function getImageInlineData(
-  imageUrl?: string
-): Promise<{ imageBytes: string; mimeType: string } | undefined> {
-  if (!imageUrl) return undefined;
-
-  try {
-    if (imageUrl.startsWith("http://") || imageUrl.startsWith("https://")) {
-      const res = await fetch(imageUrl);
-      if (!res.ok) return undefined;
-      const arrayBuffer = await res.arrayBuffer();
-      const base64 = Buffer.from(arrayBuffer).toString("base64");
-      const mimeType = res.headers.get("content-type") || "image/png";
-      return { imageBytes: base64, mimeType };
+function getWavespeedApiKey(): string {
+  let apiKey = process.env.WAVESPEED_API_KEY;
+  if (!apiKey) {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const dotenv = require("dotenv");
+      dotenv.config({ path: ".env.local" });
+      apiKey = process.env.WAVESPEED_API_KEY;
+    } catch {
+      /* ignore dotenv load error */
     }
-
-    const localPath = path.join(process.cwd(), "public", imageUrl.replace(/^\//, ""));
-    if (fs.existsSync(localPath)) {
-      const fileBuffer = fs.readFileSync(localPath);
-      const ext = path.extname(localPath).toLowerCase();
-      const mimeType = ext === ".jpg" || ext === ".jpeg" ? "image/jpeg" : "image/png";
-      return { imageBytes: fileBuffer.toString("base64"), mimeType };
-    }
-  } catch (err) {
-    console.warn("[getImageInlineData] Could not load image for Veo generation:", err);
   }
 
-  return undefined;
+  if (!apiKey) {
+    throw new VideoGenError("WAVESPEED_API_KEY environment variable is missing");
+  }
+
+  return apiKey;
+}
+
+function resolvePublicImageUrl(imageUrl?: string | null): string {
+  if (!imageUrl) return "";
+  if (imageUrl.startsWith("http://") || imageUrl.startsWith("https://")) {
+    return imageUrl;
+  }
+  const baseUrl = process.env.R2_PUBLIC_URL || process.env.APP_URL || "http://localhost:3000";
+  return `${baseUrl.replace(/\/$/, "")}/${imageUrl.replace(/^\//, "")}`;
 }
 
 /**
- * Extends an 8s Veo clip to targetDurationSeconds by extracting the last frame
- * and applying a Ken Burns pan/zoom effect for the remaining duration.
+ * Extends an H3 video clip if targetDurationSeconds > 15s by extracting the last frame
+ * and applying a Ken Burns pan/zoom composition for the remaining duration.
  */
-async function extendVeoClipDuration(
-  veoBuffer: Buffer,
+async function extendVideoClipDuration(
+  videoBuffer: Buffer,
   targetDurationSeconds: number
 ): Promise<Buffer> {
   const tempDir = path.join(process.cwd(), "public", "generated", "temp");
@@ -73,18 +56,18 @@ async function extendVeoClipDuration(
   }
 
   const timestamp = Date.now();
-  const veoPath = path.join(tempDir, `veo_${timestamp}.mp4`);
+  const clipPath = path.join(tempDir, `h3_${timestamp}.mp4`);
   const lastFramePath = path.join(tempDir, `frame_${timestamp}.png`);
   const extClipPath = path.join(tempDir, `ext_${timestamp}.mp4`);
   const finalPath = path.join(tempDir, `final_${timestamp}.mp4`);
 
   try {
-    fs.writeFileSync(veoPath, veoBuffer);
+    fs.writeFileSync(clipPath, videoBuffer);
 
-    const extendDuration = targetDurationSeconds - 8;
+    const extendDuration = Math.max(1, targetDurationSeconds - 15);
 
-    // Extract last frame of Veo clip
-    await execAsync(`ffmpeg -y -sseof -0.5 -i "${veoPath}" -update 1 -q:v 2 "${lastFramePath}"`);
+    // Extract last frame of H3 clip
+    await execAsync(`ffmpeg -y -sseof -0.5 -i "${clipPath}" -update 1 -q:v 2 "${lastFramePath}"`);
 
     // Create Ken Burns zoompan clip from last frame for remaining duration
     await execAsync(
@@ -93,216 +76,173 @@ async function extendVeoClipDuration(
       )}:s=1920x1080,fps=30" -t ${extendDuration} -pix_fmt yuv420p "${extClipPath}"`
     );
 
-    // Concatenate initial Veo clip with extended Ken Burns clip
+    // Concatenate initial 15s H3 clip with extended Ken Burns clip
     await execAsync(
-      `ffmpeg -y -i "${veoPath}" -i "${extClipPath}" -filter_complex "[0:v][1:v]concat=n=2:v=1:a=0[v]" -map "[v]" "${finalPath}"`
+      `ffmpeg -y -i "${clipPath}" -i "${extClipPath}" -filter_complex "[0:v][1:v]concat=n=2:v=1:a=0[v]" -map "[v]" "${finalPath}"`
     );
 
     if (fs.existsSync(finalPath)) {
       const extendedBuffer = fs.readFileSync(finalPath);
-
-      // Clean up temp files asynchronously
-      [veoPath, lastFramePath, extClipPath, finalPath].forEach((p) => {
-        if (fs.existsSync(/*turbopackIgnore: true*/ p)) fs.unlinkSync(p);
+      [clipPath, lastFramePath, extClipPath, finalPath].forEach((p) => {
+        if (fs.existsSync(p)) fs.unlinkSync(p);
       });
-
       return extendedBuffer;
     }
   } catch (err) {
-    console.warn("[extendVeoClipDuration] FFmpeg extension failed, returning original Veo clip:", err);
-    [veoPath, lastFramePath, extClipPath, finalPath].forEach((p) => {
-      if (fs.existsSync(/*turbopackIgnore: true*/ p)) fs.unlinkSync(p);
+    console.warn("[extendVideoClipDuration] FFmpeg extension failed, returning original clip:", err);
+    [clipPath, lastFramePath, extClipPath, finalPath].forEach((p) => {
+      if (fs.existsSync(p)) fs.unlinkSync(p);
     });
   }
 
-  return veoBuffer;
+  return videoBuffer;
 }
 
 export async function generateShotVideo(
   prompt: string,
   durationSeconds: number,
-  sourceImageUrl?: string
+  sourceImageUrl?: string | null
 ): Promise<string> {
-  const useRealVideoGen = process.env.USE_REAL_VIDEO_GEN === "true";
+  const apiKey = getWavespeedApiKey();
 
-  // ─── Real Veo Generation Path ────────────────────────────────────────────────
-  if (useRealVideoGen) {
-    const apiKey = process.env.GEMINI_API_KEY || process.env.OPENAI_API_KEY;
-    if (!apiKey) {
-      throw new VideoGenError("GEMINI_API_KEY is required for USE_REAL_VIDEO_GEN=true");
-    }
+  // Clamp duration to MiniMax H3's valid range of 5-15 seconds
+  const h3Duration = Math.max(5, Math.min(15, Math.round(durationSeconds)));
+  const publicImageUrl = resolvePublicImageUrl(sourceImageUrl);
 
-    try {
-      const ai = new GoogleGenAI({ apiKey });
-      const tier = (process.env.VEO_TIER || "fast").toLowerCase();
+  console.log(
+    `[VideoGen Wavespeed] Submitting MiniMax H3 image-to-video | Prompt: "${prompt.slice(0, 60)}..." | Duration: ${h3Duration}s`
+  );
 
-      // Per-second pricing for Veo tiers
-      const costPerSecondMap: Record<string, number> = {
-        lite: 0.05,
-        fast: 0.15,
-        standard: 0.40,
-      };
+  // 1. POST request to Wavespeed MiniMax H3 image-to-video endpoint
+  const initResponse = await fetch("https://api.wavespeed.ai/api/v3/minimax/h3/image-to-video", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      prompt,
+      image: publicImageUrl || undefined,
+      duration: h3Duration,
+    }),
+  });
 
-      const ratePerSecond = costPerSecondMap[tier] || 0.15;
-      const veoClipDuration = 8;
-      const callCost = veoClipDuration * ratePerSecond;
-
-      runningPipelineVeoCost += callCost;
-      console.log(
-        `[Veo Video Gen] Tier: ${tier} | Call Cost: $${callCost.toFixed(
-          2
-        )} | Pipeline Running Total: $${runningPipelineVeoCost.toFixed(2)}`
-      );
-
-      const imageInline = await getImageInlineData(sourceImageUrl);
-
-      // Start long-running Veo video generation operation
-      const generateParams: Record<string, unknown> = {
-        model: "veo-3.1-generate-preview",
-        prompt,
-        config: {
-          aspectRatio: "16:9",
-        },
-      };
-
-      if (imageInline) {
-        generateParams.image = {
-          imageBytes: imageInline.imageBytes,
-          mimeType: imageInline.mimeType,
-        };
-      }
-
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      let operation = await (ai.models as any).generateVideos(generateParams);
-
-      // Poll every 6 seconds until operation completes
-      while (operation && !operation.done) {
-        await new Promise((resolve) => setTimeout(resolve, 6000));
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        operation = await (ai.operations as any).getVideosOperation({
-          operation,
-        });
-      }
-
-      // Extract generated video bytes
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const generatedVideos = (operation as any)?.response?.generatedVideos;
-      const videoBytesBase64 = generatedVideos?.[0]?.video?.videoBytes;
-
-      if (!videoBytesBase64) {
-        throw new VideoGenError("Veo API returned no video bytes in completed operation response");
-      }
-
-      let videoBuffer: Buffer = Buffer.from(videoBytesBase64, "base64");
-
-      // Extend clip if target duration > 8s
-      if (durationSeconds > 8) {
-        videoBuffer = (await extendVeoClipDuration(videoBuffer, durationSeconds)) as Buffer;
-      }
-
-      const fileName = `video_${Date.now()}_${Math.random().toString(36).substring(7)}.mp4`;
-      const videoUrl = await saveGeneratedFile(videoBuffer, fileName, "videos", "video/mp4");
-
-      console.log(
-        `[VideoGen Success] Prompt: "${prompt.slice(0, 60)}..." | URL: ${videoUrl}`
-      );
-
-      return videoUrl;
-    } catch (error) {
-      if (error instanceof VideoGenError) throw error;
-      console.warn("[Veo Video Gen] Real Veo generation failed, falling back to provider:", error);
-    }
+  if (!initResponse.ok) {
+    const errText = await initResponse.text();
+    throw new VideoGenError(`Wavespeed MiniMax H3 API submission failed (${initResponse.status}): ${errText}`);
   }
 
-  // ─── Fallback Provider Path (Runway / Replicate / Placeholder) ──────────────
-  const runwayKey = process.env.RUNWAY_API_KEY;
-  const replicateToken = process.env.REPLICATE_API_TOKEN;
+  const initData = await initResponse.json();
+  const requestId =
+    initData.id ||
+    initData.request_id ||
+    initData.prediction_id ||
+    initData.data?.id ||
+    initData.data?.request_id;
 
-  try {
-    if (runwayKey) {
-      const payload: Record<string, unknown> = {
-        promptText: prompt,
-        duration: Math.min(Math.max(Math.round(durationSeconds), 5), 10),
-        watermark: false,
-      };
+  if (!requestId) {
+    throw new VideoGenError(
+      `Wavespeed API response missing prediction/request ID: ${JSON.stringify(initData)}`
+    );
+  }
 
-      if (sourceImageUrl) {
-        payload.promptImage = sourceImageUrl;
-      }
+  console.log(`[VideoGen Wavespeed] Prediction created with ID: ${requestId}`);
 
-      const response = await fetch("https://api.runwayml.com/v1/image_to_video", {
-        method: "POST",
+  // 2. Poll result endpoint with exponential backoff starting at 2s
+  const startTime = Date.now();
+  const maxTimeoutMs = 120000; // 120 seconds timeout for video generation
+  let delayMs = 2000;
+
+  while (Date.now() - startTime < maxTimeoutMs) {
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+    delayMs = Math.min(delayMs + 500, 5000); // Back off interval up to 5s max
+
+    const pollResponse = await fetch(
+      `https://api.wavespeed.ai/api/v3/predictions/${requestId}/result`,
+      {
+        method: "GET",
         headers: {
-          Authorization: `Bearer ${runwayKey}`,
-          "Content-Type": "application/json",
-          "X-Runway-Version": "2024-09-13",
+          Authorization: `Bearer ${apiKey}`,
         },
-        body: JSON.stringify(payload),
-      });
-
-      if (!response.ok) {
-        const errText = await response.text();
-        throw new VideoGenError(`Runway API request failed (${response.status}): ${errText}`);
       }
+    );
 
-      const data = (await response.json()) as { id?: string; output?: string[]; videoUrl?: string };
-      if (data.videoUrl) return data.videoUrl;
-      if (Array.isArray(data.output) && data.output[0]) return data.output[0];
-      if (data.id) return `https://api.runwayml.com/v1/tasks/${data.id}`;
+    if (!pollResponse.ok) {
+      const errText = await pollResponse.text();
+      throw new VideoGenError(
+        `Wavespeed video polling failed (${pollResponse.status}) for request ${requestId}: ${errText}`
+      );
     }
 
-    if (replicateToken) {
-      const Replicate = (await import("replicate")).default;
-      const replicate = new Replicate({ auth: replicateToken });
+    const pollData = await pollResponse.json();
+    const status = String(
+      pollData.status || pollData.state || pollData.data?.status || ""
+    ).toLowerCase();
 
-      const inputPayload: Record<string, unknown> = {
-        prompt,
-        prompt_optimizer: true,
-      };
+    console.log(`[VideoGen Wavespeed Polling] Request: ${requestId} | Status: ${status}`);
 
-      if (sourceImageUrl) {
-        inputPayload.first_frame_image = sourceImageUrl;
-      }
+    if (status === "completed" || status === "succeeded" || status === "done") {
+      const outputs =
+        pollData.outputs ||
+        pollData.output ||
+        pollData.data?.outputs ||
+        pollData.data?.output ||
+        pollData.result?.urls ||
+        pollData.result;
 
-      const output = await replicate.run("minimax/video-01", {
-        input: inputPayload,
-      });
+      const videoUrl = Array.isArray(outputs) ? outputs[0] : typeof outputs === "string" ? outputs : null;
 
-      if (typeof output === "string") return output;
-      if (Array.isArray(output) && output[0]) return String(output[0]);
-      if (output && typeof output === "object" && "url" in output) {
-        return String((output as { url: () => string }).url());
-      }
-    }
-
-    // ─── Ken Burns fallback: render real MP4 from still image using FFmpeg ───
-    const tmpFileName = `video_${Date.now()}_${Math.random().toString(36).substring(7)}.mp4`;
-    const tmpPath = path.join(os.tmpdir(), tmpFileName);
-
-    try {
-      await renderStillToVideo(sourceImageUrl, durationSeconds, tmpPath);
-
-      if (fs.existsSync(tmpPath) && fs.statSync(tmpPath).size > 0) {
-        const videoBuffer = fs.readFileSync(tmpPath);
-        try { fs.unlinkSync(tmpPath); } catch { /* ignore cleanup error */ }
-
-        const videoUrl = await saveGeneratedFile(videoBuffer, tmpFileName, "videos", "video/mp4");
-
-        console.log(
-          `[VideoGen Success - Ken Burns] Prompt: "${prompt.slice(0, 60)}..." | URL: ${videoUrl} | Size: ${videoBuffer.length} bytes`
+      if (!videoUrl) {
+        throw new VideoGenError(
+          `Wavespeed prediction completed but video URL is missing: ${JSON.stringify(pollData)}`
         );
-        return videoUrl;
       }
-    } catch (kenBurnsErr) {
-      console.warn("[VideoGen] Ken Burns render failed:", (kenBurnsErr as Error).message?.slice(0, 120));
+
+      // 3. Download generated video
+      console.log(`[VideoGen Wavespeed] Downloading generated video from ${videoUrl}...`);
+      const vidRes = await fetch(videoUrl);
+      if (!vidRes.ok) {
+        throw new VideoGenError(`Failed to download completed video from ${videoUrl} (${vidRes.status})`);
+      }
+
+      const arrayBuffer = await vidRes.arrayBuffer();
+      let videoBuffer: Buffer = Buffer.from(arrayBuffer);
+
+      // 4. Extend clip if target duration exceeds 15s (H3's max per call)
+      if (durationSeconds > 15) {
+        console.log(`[VideoGen Extension] Target duration ${durationSeconds}s > 15s. Extending clip via FFmpeg...`);
+        videoBuffer = await extendVideoClipDuration(videoBuffer, durationSeconds);
+      }
+
+      // 5. Save via saveGeneratedFile into public/generated/videos/
+      const fileName = `video_${Date.now()}_${Math.random().toString(36).substring(7)}.mp4`;
+      const savedUrl = await saveGeneratedFile(videoBuffer, fileName, "videos", "video/mp4");
+
+      // Verify file on disk and log file size in bytes using fs.statSync
+      const diskPath = path.join(process.cwd(), "public", "generated", "videos", fileName);
+      let fileSize = 0;
+      try {
+        const stats = fs.statSync(diskPath);
+        fileSize = stats.size;
+      } catch {
+        fileSize = videoBuffer.byteLength;
+      }
+
+      console.log(
+        `[VideoGen Success] Prompt: "${prompt}" | Saved: ${savedUrl} | Local File: ${diskPath} | Size: ${fileSize} bytes`
+      );
+
+      return savedUrl;
     }
 
-    // Last-resort URL fallback (should never reach here after FFmpeg is installed)
-    const lastResortUrl = sourceImageUrl || "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4";
-    console.warn(`[VideoGen Fallback] Could not render video. Returning URL: ${lastResortUrl}`);
-    return lastResortUrl;
-  } catch (error) {
-    if (error instanceof VideoGenError) throw error;
-    throw new VideoGenError("Failed to generate video", error);
+    if (status === "failed" || status === "error" || status === "canceled") {
+      // Throw typed VideoGenError on failure — no silent fallbacks
+      throw new VideoGenError(
+        `Wavespeed prediction failed with status '${status}': ${JSON.stringify(pollData)}`
+      );
+    }
   }
+
+  // Throw typed VideoGenError on timeout
+  throw new VideoGenError(`Wavespeed video generation timed out after 120s for request ${requestId}`);
 }
