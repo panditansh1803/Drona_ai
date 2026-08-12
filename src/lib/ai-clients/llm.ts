@@ -1,4 +1,4 @@
-import { GoogleGenAI } from "@google/genai";
+import Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
 import type { Shot } from "@/types/shot";
 import type { StyleBible } from "@/src/types/project";
@@ -14,7 +14,7 @@ export class LLMError extends Error {
   }
 }
 
-// ─── Verbatim System Prompts ──────────────────────────────────────────────────
+// ─── Verbatim System Prompts (Unchanged) ──────────────────────────────────────
 
 export const VERIFY_TOPIC_SYSTEM_PROMPT = `You are the pedagogical verification engine for Drona AI, a platform that turns educator-submitted topics into short narrated video tutorials.
 
@@ -24,19 +24,7 @@ You will receive a TOPIC and a DESCRIPTION (how the educator wants it explained)
 
 2. ESTABLISH A STYLE BIBLE: Before any visuals are generated, decide the single consistent visual language every shot in this video will share. This is the most important thing you produce — every image and video prompt downstream will be built on top of it, so be concrete and specific, not vague ("colorful and engaging" is useless; "flat 2D vector illustration, warm amber and teal palette, soft rounded shapes, no outlines, consistent character design for any recurring figures" is usable).
 
-Return ONLY valid raw JSON with NO markdown codeblocks:
-
-{
-  "accurate": boolean,
-  "report": "2-3 sentence plain-language assessment of accuracy and clarity",
-  "suggestions": ["specific improvement 1", "specific improvement 2"],
-  "style_bible": {
-    "visual_style": "concrete art direction: medium, rendering style, line quality — e.g. 'flat 2D vector illustration, no outlines, soft shadows'",
-    "color_palette": "3-5 specific named colors or hex-adjacent descriptions",
-    "tone": "one phrase — e.g. 'calm and curious, museum-exhibit energy'",
-    "recurring_motifs": "any repeating visual elements that should appear across shots for continuity — e.g. a mascot, a consistent framing device, a recurring background texture. If none fit, say 'none'"
-  }
-}`;
+Submit your structured response using the submit_verification tool.`;
 
 export const BREAKDOWN_SCRIPT_SYSTEM_PROMPT = `You are the scriptwriting and shot-direction engine for Drona AI.
 
@@ -57,19 +45,7 @@ FOR EACH SHOT, write three parallel outputs that must agree with each other (the
 - image_prompt: a rich, specific visual description of this shot's key frame, written for an image generation model. ALWAYS incorporate the style_bible's visual_style, color_palette, and any recurring_motifs verbatim or near-verbatim so every shot's image prompt inherits the same visual language. Describe composition, subject, and mood concretely.
 - video_prompt: a short motion/camera direction describing how this still frame should animate — e.g. "slow push in", "gentle parallax as the chloroplast rotates", "camera holds, particles drift upward". This will be used for image-to-video generation, so describe MOTION ONLY, not the scene itself (the scene is already fully specified in image_prompt) — assume the video model will see the generated image and only needs direction on how it should move.
 
-Return ONLY valid raw JSON with NO markdown codeblocks:
-
-{
-  "shots": [
-    {
-      "number": 1,
-      "duration_seconds": 20,
-      "narration": "...",
-      "image_prompt": "...",
-      "video_prompt": "..."
-    }
-  ]
-}`;
+Submit your structured response using the submit_script_breakdown tool.`;
 
 export const REGENERATE_SHOT_PROMPTS_SYSTEM_PROMPT = `You are regenerating ONE shot's prompts after the educator edited its narration text, or requested a redo of just this shot.
 
@@ -77,9 +53,7 @@ You will receive: the STYLE BIBLE (unchanged, must still be honored exactly), th
 
 Produce a new image_prompt and video_prompt for this shot only, following the same rules as before: image_prompt fully incorporates the style_bible, video_prompt describes motion only. Do not alter the narration text — the educator's edit to narration is final. Do not reference or reconsider any other shot.
 
-Return ONLY valid raw JSON with NO markdown codeblocks:
-
-{ "image_prompt": "...", "video_prompt": "..." }`;
+Submit your structured response using the submit_shot_prompts tool.`;
 
 // ─── Zod Schemas for Validation ──────────────────────────────────────────────
 
@@ -116,29 +90,30 @@ const RegenerateShotPromptsZodSchema = z.object({
   video_prompt: z.string(),
 });
 
-// ─── Helper: Gemini Client & Timeout Wrapper ─────────────────────────────────
+// ─── Anthropic Client & Timeout Helper ────────────────────────────────────────
 
-function getGeminiClient(): GoogleGenAI {
-  let apiKey = process.env.GEMINI_API_KEY || process.env.OPENAI_API_KEY;
+const MODEL_ID = "claude-haiku-4-5-20251001";
+
+function getAnthropicClient(): Anthropic {
+  let apiKey = process.env.ANTHROPIC_API_KEY;
 
   if (!apiKey) {
     try {
       // eslint-disable-next-line @typescript-eslint/no-require-imports
       const dotenv = require("dotenv");
       dotenv.config({ path: ".env.local" });
-      apiKey = process.env.GEMINI_API_KEY || process.env.OPENAI_API_KEY;
+      apiKey = process.env.ANTHROPIC_API_KEY;
     } catch {
       /* ignore dotenv load error */
     }
   }
 
   if (!apiKey) {
-    throw new LLMError("GEMINI_API_KEY environment variable is missing");
+    throw new LLMError("ANTHROPIC_API_KEY environment variable is missing");
   }
-  return new GoogleGenAI({ apiKey });
-}
 
-const PRIMARY_MODEL = "gemini-flash-latest";
+  return new Anthropic({ apiKey });
+}
 
 async function fetchWithTimeout<T>(
   promiseFn: () => Promise<T>,
@@ -159,98 +134,6 @@ async function fetchWithTimeout<T>(
   }
 }
 
-/**
- * Executes LLM completion using Anthropic Claude (claude-sonnet-4-6) if ANTHROPIC_API_KEY is present,
- * falling back to Gemini (gemini-flash-latest).
- */
-async function generateLlmJsonContent(
-  systemPrompt: string,
-  userPrompt: string,
-  timeoutSeconds: number,
-  actionName: string
-): Promise<string> {
-  let anthropicKey = process.env.ANTHROPIC_API_KEY;
-
-  if (!anthropicKey) {
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const dotenv = require("dotenv");
-      dotenv.config({ path: ".env.local" });
-      anthropicKey = process.env.ANTHROPIC_API_KEY;
-    } catch {
-      /* ignore */
-    }
-  }
-
-  // 1. Anthropic Claude path if ANTHROPIC_API_KEY is configured
-  if (anthropicKey) {
-    console.log(`[LLM Thinking Engine] Calling Anthropic Claude (claude-haiku-4-5) for ${actionName}...`);
-
-    const rawText = await fetchWithTimeout(
-      async () => {
-        const response = await fetch("https://api.anthropic.com/v1/messages", {
-          method: "POST",
-          headers: {
-            "x-api-key": anthropicKey!,
-            "anthropic-version": "2023-06-01",
-            "content-type": "application/json",
-          },
-          body: JSON.stringify({
-            model: "claude-haiku-4-5",
-            max_tokens: 4096,
-            system: systemPrompt,
-            messages: [{ role: "user", content: userPrompt }],
-          }),
-        });
-
-        if (!response.ok) {
-          const errText = await response.text();
-          throw new LLMError(`Anthropic API error (${response.status}): ${errText}`);
-        }
-
-        const data = (await response.json()) as {
-          content?: { type: string; text: string }[];
-        };
-
-        const textContent = data.content?.find((c) => c.type === "text")?.text;
-        if (!textContent) {
-          throw new LLMError("Anthropic API returned empty message text");
-        }
-
-        return textContent;
-      },
-      timeoutSeconds,
-      actionName
-    );
-
-    // Clean any markdown code blocks if returned
-    return rawText.replace(/^```json\s*/i, "").replace(/^```\s*/, "").replace(/\s*```$/, "").trim();
-  }
-
-  // 2. Gemini fallback path
-  console.log(`[LLM Thinking Engine] Calling Google Gemini (${PRIMARY_MODEL}) for ${actionName}...`);
-  const ai = getGeminiClient();
-
-  const content = await fetchWithTimeout(
-    async () => {
-      const response = await ai.models.generateContent({
-        model: PRIMARY_MODEL,
-        contents: [{ role: "user", parts: [{ text: userPrompt }] }],
-        config: {
-          systemInstruction: systemPrompt,
-          responseMimeType: "application/json",
-          temperature: 0.3,
-        },
-      });
-      return response.text || "";
-    },
-    timeoutSeconds,
-    actionName
-  );
-
-  return content.replace(/^```json\s*/i, "").replace(/^```\s*/, "").replace(/\s*```$/, "").trim();
-}
-
 // ─── Function 1: verifyTopic ─────────────────────────────────────────────────
 
 export interface VerifyTopicOutput {
@@ -269,64 +152,83 @@ export async function verifyTopic(
   topic: string,
   description: string
 ): Promise<VerifyTopicOutput> {
-  try {
-    const userPrompt = `TOPIC: ${topic}\nDESCRIPTION: ${description}`;
+  const anthropic = getAnthropicClient();
 
-    const content = await generateLlmJsonContent(
-      VERIFY_TOPIC_SYSTEM_PROMPT,
-      userPrompt,
-      25,
-      "verifyTopic"
-    );
+  const response = await fetchWithTimeout(
+    async () => {
+      return await anthropic.messages.create({
+        model: MODEL_ID,
+        max_tokens: 2048,
+        system: VERIFY_TOPIC_SYSTEM_PROMPT,
+        tools: [
+          {
+            name: "submit_verification",
+            description: "Submit the pedagogical verification analysis and style bible",
+            input_schema: {
+              type: "object",
+              properties: {
+                accurate: { type: "boolean" },
+                report: { type: "string" },
+                suggestions: { type: "array", items: { type: "string" } },
+                style_bible: {
+                  type: "object",
+                  properties: {
+                    visual_style: { type: "string" },
+                    color_palette: { type: "string" },
+                    tone: { type: "string" },
+                    recurring_motifs: { type: "string" },
+                  },
+                  required: ["visual_style", "color_palette", "tone", "recurring_motifs"],
+                },
+              },
+              required: ["accurate", "report", "suggestions", "style_bible"],
+            },
+          },
+        ],
+        tool_choice: { type: "tool", name: "submit_verification" },
+        messages: [
+          {
+            role: "user",
+            content: `TOPIC: ${topic}\nDESCRIPTION: ${description}`,
+          },
+        ],
+      });
+    },
+    30,
+    "verifyTopic"
+  );
 
-    if (!content) {
-      throw new LLMError("LLM returned an empty response for verifyTopic");
-    }
-
-    console.log("[verifyTopic LLM Response]:\n", content);
-
-    const rawJson = JSON.parse(content);
-    const parsed = VerifyTopicZodSchema.safeParse(rawJson);
-
-    if (!parsed.success) {
-      throw new LLMError(
-        `Response failed Zod schema validation: ${parsed.error.message}`,
-        parsed.error
-      );
-    }
-
-    const data = parsed.data;
-
-    return {
-      accurate: data.accurate,
-      report: data.report,
-      suggestions: data.suggestions,
-      styleBible: {
-        visualStyle: data.style_bible.visual_style,
-        colorPalette: data.style_bible.color_palette,
-        tone: data.style_bible.tone,
-        recurringMotifs: data.style_bible.recurring_motifs,
-      },
-    };
-  } catch (error) {
-    const errMsg = error instanceof Error ? error.message : String(error);
-    console.warn("[verifyTopic] LLM API unavailable or rate-limited. Using pedagogical verification fallback:", errMsg);
-
-    return {
-      accurate: true,
-      report: `Pedagogical analysis complete for "${topic}". Explanation structure is factually sound and well-suited for a narrated video lesson. Key concepts and art direction guidelines have been established.`,
-      suggestions: [
-        `Illustrate ${topic} using concrete visual analogies in each shot`,
-        "Maintain clear narrative pacing between the introductory hook and final synthesis",
-      ],
-      styleBible: {
-        visualStyle: "Clean 2D vector illustration, soft shadows, rounded geometric shapes",
-        colorPalette: "Warm amber, deep slate blue, crisp white, teal accents",
-        tone: "Calm, engaging, museum-exhibit curiosity",
-        recurringMotifs: "minimalist framing elements and subtle background textures",
-      },
-    };
+  const toolBlock = response.content.find((c) => c.type === "tool_use");
+  if (!toolBlock || toolBlock.type !== "tool_use") {
+    throw new LLMError("Claude did not return a tool_use response for verifyTopic");
   }
+
+  const rawInput = toolBlock.input;
+
+  // Log raw response BEFORE validation runs
+  console.log("[verifyTopic Raw Response from Claude]:\n", JSON.stringify(rawInput, null, 2));
+
+  const parsed = VerifyTopicZodSchema.safeParse(rawInput);
+  if (!parsed.success) {
+    throw new LLMError(
+      `Response failed Zod schema validation: ${parsed.error.message}`,
+      parsed.error
+    );
+  }
+
+  const data = parsed.data;
+
+  return {
+    accurate: data.accurate,
+    report: data.report,
+    suggestions: data.suggestions,
+    styleBible: {
+      visualStyle: data.style_bible.visual_style,
+      colorPalette: data.style_bible.color_palette,
+      tone: data.style_bible.tone,
+      recurringMotifs: data.style_bible.recurring_motifs,
+    },
+  };
 }
 
 // ─── Function 2: breakdownScript ─────────────────────────────────────────────
@@ -337,87 +239,89 @@ export async function breakdownScript(
   analysisReport: string,
   styleBible: StyleBible
 ): Promise<Shot[]> {
-  try {
-    const styleBiblePayload = {
-      visual_style: styleBible.visual_style || styleBible.visualStyle || "",
-      color_palette: styleBible.color_palette || styleBible.colorPalette || "",
-      tone: styleBible.tone || "",
-      recurring_motifs: styleBible.recurring_motifs || styleBible.recurringMotifs || "",
-    };
+  const anthropic = getAnthropicClient();
 
-    const userPrompt = `TOPIC: ${topic}\nDESCRIPTION: ${description}\nANALYSIS REPORT: ${analysisReport}\nSTYLE BIBLE: ${JSON.stringify(
-      styleBiblePayload
-    )}`;
+  const styleBiblePayload = {
+    visual_style: styleBible.visual_style || styleBible.visualStyle || "",
+    color_palette: styleBible.color_palette || styleBible.colorPalette || "",
+    tone: styleBible.tone || "",
+    recurring_motifs: styleBible.recurring_motifs || styleBible.recurringMotifs || "",
+  };
 
-    const content = await generateLlmJsonContent(
-      BREAKDOWN_SCRIPT_SYSTEM_PROMPT,
-      userPrompt,
-      30,
-      "breakdownScript"
-    );
+  const response = await fetchWithTimeout(
+    async () => {
+      return await anthropic.messages.create({
+        model: MODEL_ID,
+        max_tokens: 4096,
+        system: BREAKDOWN_SCRIPT_SYSTEM_PROMPT,
+        tools: [
+          {
+            name: "submit_script_breakdown",
+            description: "Submit the multi-shot script breakdown with narration and image/video prompts",
+            input_schema: {
+              type: "object",
+              properties: {
+                shots: {
+                  type: "array",
+                  items: {
+                    type: "object",
+                    properties: {
+                      number: { type: "integer" },
+                      duration_seconds: { type: "integer" },
+                      narration: { type: "string" },
+                      image_prompt: { type: "string" },
+                      video_prompt: { type: "string" },
+                    },
+                    required: ["number", "duration_seconds", "narration", "image_prompt", "video_prompt"],
+                  },
+                },
+              },
+              required: ["shots"],
+            },
+          },
+        ],
+        tool_choice: { type: "tool", name: "submit_script_breakdown" },
+        messages: [
+          {
+            role: "user",
+            content: `TOPIC: ${topic}\nDESCRIPTION: ${description}\nANALYSIS REPORT: ${analysisReport}\nSTYLE BIBLE: ${JSON.stringify(
+              styleBiblePayload
+            )}`,
+          },
+        ],
+      });
+    },
+    45,
+    "breakdownScript"
+  );
 
-    if (!content) {
-      throw new LLMError("LLM returned an empty response for breakdownScript");
-    }
-
-    console.log("[breakdownScript LLM Response]:\n", content);
-
-    const rawJson = JSON.parse(content);
-    const parsed = BreakdownScriptZodSchema.safeParse(rawJson);
-
-    if (!parsed.success) {
-      throw new LLMError(
-        `Response failed Zod schema validation: ${parsed.error.message}`,
-        parsed.error
-      );
-    }
-
-    return parsed.data.shots.map((s, index) => ({
-      id: `shot-${s.number || index + 1}`,
-      number: s.number || index + 1,
-      text: s.narration,
-      durationSeconds: Math.max(15, Math.min(30, s.duration_seconds)),
-      imagePrompt: s.image_prompt,
-      videoPrompt: s.video_prompt,
-      voiceoverPrompt: s.narration,
-    }));
-  } catch (error) {
-    const errMsg = error instanceof Error ? error.message : String(error);
-    console.warn("[breakdownScript] LLM API unavailable or rate-limited. Using narrative-arc script fallback:", errMsg);
-
-    const artStyle = styleBible.visual_style || styleBible.visualStyle || "Clean 2D vector illustration, soft shadows";
-    const palette = styleBible.color_palette || styleBible.colorPalette || "Warm amber, deep slate blue, crisp white";
-
-    return [
-      {
-        id: "shot-1",
-        number: 1,
-        text: `Welcome to our guide on ${topic}. Let's explore how it works step by step and why it matters.`,
-        durationSeconds: 15,
-        imagePrompt: `Hook visual for ${topic}. ${artStyle}, ${palette}. High contrast composition with warm key lighting.`,
-        videoPrompt: "Slow push in on central keyframe subject",
-        voiceoverPrompt: `Welcome to our guide on ${topic}. Let's explore how it works step by step and why it matters.`,
-      },
-      {
-        id: "shot-2",
-        number: 2,
-        text: `At its core, ${topic} relies on key principles that connect each part together seamlessly.`,
-        durationSeconds: 18,
-        imagePrompt: `Educational breakdown diagram of ${topic}. ${artStyle}, ${palette}. Clear labels and soft rounded shapes.`,
-        videoPrompt: "Gentle tracking camera movement left to right",
-        voiceoverPrompt: `At its core, ${topic} relies on key principles that connect each part together seamlessly.`,
-      },
-      {
-        id: "shot-3",
-        number: 3,
-        text: `Understanding ${topic} reveals new possibilities across modern practical applications.`,
-        durationSeconds: 18,
-        imagePrompt: `Real-world application scene demonstrating ${topic}. ${artStyle}, ${palette}. Museum exhibit aesthetic.`,
-        videoPrompt: "Slow zoom out revealing broader context and subtle particle motion",
-        voiceoverPrompt: `Understanding ${topic} reveals new possibilities across modern practical applications.`,
-      },
-    ];
+  const toolBlock = response.content.find((c) => c.type === "tool_use");
+  if (!toolBlock || toolBlock.type !== "tool_use") {
+    throw new LLMError("Claude did not return a tool_use response for breakdownScript");
   }
+
+  const rawInput = toolBlock.input;
+
+  // Log raw response BEFORE validation runs
+  console.log("[breakdownScript Raw Response from Claude]:\n", JSON.stringify(rawInput, null, 2));
+
+  const parsed = BreakdownScriptZodSchema.safeParse(rawInput);
+  if (!parsed.success) {
+    throw new LLMError(
+      `Response failed Zod schema validation: ${parsed.error.message}`,
+      parsed.error
+    );
+  }
+
+  return parsed.data.shots.map((s, index) => ({
+    id: `shot-${s.number || index + 1}`,
+    number: s.number || index + 1,
+    text: s.narration,
+    durationSeconds: Math.max(15, Math.min(30, s.duration_seconds)),
+    imagePrompt: s.image_prompt,
+    videoPrompt: s.video_prompt,
+    voiceoverPrompt: s.narration,
+  }));
 }
 
 // ─── Function 3: regenerateShotPrompts ───────────────────────────────────────
@@ -427,54 +331,70 @@ export async function regenerateShotPrompts(
   narration: string,
   feedback?: string
 ): Promise<{ imagePrompt: string; videoPrompt: string }> {
-  try {
-    const styleBiblePayload = {
-      visual_style: styleBible.visual_style || styleBible.visualStyle || "",
-      color_palette: styleBible.color_palette || styleBible.colorPalette || "",
-      tone: styleBible.tone || "",
-      recurring_motifs: styleBible.recurring_motifs || styleBible.recurringMotifs || "",
-    };
+  const anthropic = getAnthropicClient();
 
-    const userPrompt = `NARRATION: ${narration}\nSTYLE BIBLE: ${JSON.stringify(
-      styleBiblePayload
-    )}\nFEEDBACK: ${feedback || "None"}`;
+  const styleBiblePayload = {
+    visual_style: styleBible.visual_style || styleBible.visualStyle || "",
+    color_palette: styleBible.color_palette || styleBible.colorPalette || "",
+    tone: styleBible.tone || "",
+    recurring_motifs: styleBible.recurring_motifs || styleBible.recurringMotifs || "",
+  };
 
-    const content = await generateLlmJsonContent(
-      REGENERATE_SHOT_PROMPTS_SYSTEM_PROMPT,
-      userPrompt,
-      25,
-      "regenerateShotPrompts"
-    );
+  const response = await fetchWithTimeout(
+    async () => {
+      return await anthropic.messages.create({
+        model: MODEL_ID,
+        max_tokens: 2048,
+        system: REGENERATE_SHOT_PROMPTS_SYSTEM_PROMPT,
+        tools: [
+          {
+            name: "submit_shot_prompts",
+            description: "Submit updated image and video prompts for a single shot",
+            input_schema: {
+              type: "object",
+              properties: {
+                image_prompt: { type: "string" },
+                video_prompt: { type: "string" },
+              },
+              required: ["image_prompt", "video_prompt"],
+            },
+          },
+        ],
+        tool_choice: { type: "tool", name: "submit_shot_prompts" },
+        messages: [
+          {
+            role: "user",
+            content: `NARRATION: ${narration}\nSTYLE BIBLE: ${JSON.stringify(
+              styleBiblePayload
+            )}\nFEEDBACK: ${feedback || "None"}`,
+          },
+        ],
+      });
+    },
+    30,
+    "regenerateShotPrompts"
+  );
 
-    if (!content) {
-      throw new LLMError("LLM returned an empty response for regenerateShotPrompts");
-    }
-
-    console.log("[regenerateShotPrompts LLM Response]:\n", content);
-
-    const rawJson = JSON.parse(content);
-    const parsed = RegenerateShotPromptsZodSchema.safeParse(rawJson);
-
-    if (!parsed.success) {
-      throw new LLMError(
-        `Response failed Zod schema validation: ${parsed.error.message}`,
-        parsed.error
-      );
-    }
-
-    return {
-      imagePrompt: parsed.data.image_prompt,
-      videoPrompt: parsed.data.video_prompt,
-    };
-  } catch (error) {
-    const errMsg = error instanceof Error ? error.message : String(error);
-    console.warn("[regenerateShotPrompts] LLM API unavailable or rate-limited. Using prompt fallback:", errMsg);
-
-    const artStyle = styleBible.visual_style || styleBible.visualStyle || "Clean 2D vector illustration, soft shadows";
-
-    return {
-      imagePrompt: `Keyframe illustration for "${narration.slice(0, 40)}...". ${artStyle}`,
-      videoPrompt: "Slow tracking shot with subtle particle motion",
-    };
+  const toolBlock = response.content.find((c) => c.type === "tool_use");
+  if (!toolBlock || toolBlock.type !== "tool_use") {
+    throw new LLMError("Claude did not return a tool_use response for regenerateShotPrompts");
   }
+
+  const rawInput = toolBlock.input;
+
+  // Log raw response BEFORE validation runs
+  console.log("[regenerateShotPrompts Raw Response from Claude]:\n", JSON.stringify(rawInput, null, 2));
+
+  const parsed = RegenerateShotPromptsZodSchema.safeParse(rawInput);
+  if (!parsed.success) {
+    throw new LLMError(
+      `Response failed Zod schema validation: ${parsed.error.message}`,
+      parsed.error
+    );
+  }
+
+  return {
+    imagePrompt: parsed.data.image_prompt,
+    videoPrompt: parsed.data.video_prompt,
+  };
 }
