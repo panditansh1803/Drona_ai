@@ -24,7 +24,7 @@ You will receive a TOPIC and a DESCRIPTION (how the educator wants it explained)
 
 2. ESTABLISH A STYLE BIBLE: Before any visuals are generated, decide the single consistent visual language every shot in this video will share. This is the most important thing you produce — every image and video prompt downstream will be built on top of it, so be concrete and specific, not vague ("colorful and engaging" is useless; "flat 2D vector illustration, warm amber and teal palette, soft rounded shapes, no outlines, consistent character design for any recurring figures" is usable).
 
-Return ONLY this JSON, no other text:
+Return ONLY valid raw JSON with NO markdown codeblocks:
 
 {
   "accurate": boolean,
@@ -57,7 +57,7 @@ FOR EACH SHOT, write three parallel outputs that must agree with each other (the
 - image_prompt: a rich, specific visual description of this shot's key frame, written for an image generation model. ALWAYS incorporate the style_bible's visual_style, color_palette, and any recurring_motifs verbatim or near-verbatim so every shot's image prompt inherits the same visual language. Describe composition, subject, and mood concretely.
 - video_prompt: a short motion/camera direction describing how this still frame should animate — e.g. "slow push in", "gentle parallax as the chloroplast rotates", "camera holds, particles drift upward". This will be used for image-to-video generation, so describe MOTION ONLY, not the scene itself (the scene is already fully specified in image_prompt) — assume the video model will see the generated image and only needs direction on how it should move.
 
-Return ONLY this JSON, no other text:
+Return ONLY valid raw JSON with NO markdown codeblocks:
 
 {
   "shots": [
@@ -77,7 +77,7 @@ You will receive: the STYLE BIBLE (unchanged, must still be honored exactly), th
 
 Produce a new image_prompt and video_prompt for this shot only, following the same rules as before: image_prompt fully incorporates the style_bible, video_prompt describes motion only. Do not alter the narration text — the educator's edit to narration is final. Do not reference or reconsider any other shot.
 
-Return ONLY this JSON:
+Return ONLY valid raw JSON with NO markdown codeblocks:
 
 { "image_prompt": "...", "video_prompt": "..." }`;
 
@@ -157,6 +157,98 @@ async function fetchWithTimeout<T>(
   }
 }
 
+/**
+ * Executes LLM completion using Anthropic Claude (claude-sonnet-4-6) if ANTHROPIC_API_KEY is present,
+ * falling back to Gemini (gemini-flash-latest).
+ */
+async function generateLlmJsonContent(
+  systemPrompt: string,
+  userPrompt: string,
+  timeoutSeconds: number,
+  actionName: string
+): Promise<string> {
+  let anthropicKey = process.env.ANTHROPIC_API_KEY;
+
+  if (!anthropicKey) {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const dotenv = require("dotenv");
+      dotenv.config({ path: ".env.local" });
+      anthropicKey = process.env.ANTHROPIC_API_KEY;
+    } catch {
+      /* ignore */
+    }
+  }
+
+  // 1. Anthropic Claude path if ANTHROPIC_API_KEY is configured
+  if (anthropicKey) {
+    console.log(`[LLM Thinking Engine] Calling Anthropic Claude (claude-sonnet-4-6) for ${actionName}...`);
+
+    const rawText = await fetchWithTimeout(
+      async () => {
+        const response = await fetch("https://api.anthropic.com/v1/messages", {
+          method: "POST",
+          headers: {
+            "x-api-key": anthropicKey!,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({
+            model: "claude-sonnet-4-6",
+            max_tokens: 4096,
+            system: systemPrompt,
+            messages: [{ role: "user", content: userPrompt }],
+          }),
+        });
+
+        if (!response.ok) {
+          const errText = await response.text();
+          throw new LLMError(`Anthropic API error (${response.status}): ${errText}`);
+        }
+
+        const data = (await response.json()) as {
+          content?: { type: string; text: string }[];
+        };
+
+        const textContent = data.content?.find((c) => c.type === "text")?.text;
+        if (!textContent) {
+          throw new LLMError("Anthropic API returned empty message text");
+        }
+
+        return textContent;
+      },
+      timeoutSeconds,
+      actionName
+    );
+
+    // Clean any markdown code blocks if returned
+    return rawText.replace(/^```json\s*/i, "").replace(/^```\s*/, "").replace(/\s*```$/, "").trim();
+  }
+
+  // 2. Gemini fallback path
+  console.log(`[LLM Thinking Engine] Calling Google Gemini (${PRIMARY_MODEL}) for ${actionName}...`);
+  const ai = getGeminiClient();
+
+  const content = await fetchWithTimeout(
+    async () => {
+      const response = await ai.models.generateContent({
+        model: PRIMARY_MODEL,
+        contents: [{ role: "user", parts: [{ text: userPrompt }] }],
+        config: {
+          systemInstruction: systemPrompt,
+          responseMimeType: "application/json",
+          temperature: 0.3,
+        },
+      });
+      return response.text || "";
+    },
+    timeoutSeconds,
+    actionName
+  );
+
+  return content.replace(/^```json\s*/i, "").replace(/^```\s*/, "").replace(/\s*```$/, "").trim();
+}
+
 // ─── Function 1: verifyTopic ─────────────────────────────────────────────────
 
 export interface VerifyTopicOutput {
@@ -176,35 +268,20 @@ export async function verifyTopic(
   description: string
 ): Promise<VerifyTopicOutput> {
   try {
-    const ai = getGeminiClient();
+    const userPrompt = `TOPIC: ${topic}\nDESCRIPTION: ${description}`;
 
-    const content = await fetchWithTimeout(
-      async () => {
-        const response = await ai.models.generateContent({
-          model: PRIMARY_MODEL,
-          contents: [
-            {
-              role: "user",
-              parts: [{ text: `TOPIC: ${topic}\nDESCRIPTION: ${description}` }],
-            },
-          ],
-          config: {
-            systemInstruction: VERIFY_TOPIC_SYSTEM_PROMPT,
-            responseMimeType: "application/json",
-            temperature: 0.3,
-          },
-        });
-        return response.text;
-      },
+    const content = await generateLlmJsonContent(
+      VERIFY_TOPIC_SYSTEM_PROMPT,
+      userPrompt,
       25,
       "verifyTopic"
     );
 
     if (!content) {
-      throw new LLMError("Gemini returned an empty response for verifyTopic");
+      throw new LLMError("LLM returned an empty response for verifyTopic");
     }
 
-    console.log("[verifyTopic Raw Gemini Response]:\n", content);
+    console.log("[verifyTopic LLM Response]:\n", content);
 
     const rawJson = JSON.parse(content);
     const parsed = VerifyTopicZodSchema.safeParse(rawJson);
@@ -231,7 +308,7 @@ export async function verifyTopic(
     };
   } catch (error) {
     const errMsg = error instanceof Error ? error.message : String(error);
-    console.warn("[verifyTopic] Gemini API unavailable or rate-limited. Using pedagogical verification fallback:", errMsg);
+    console.warn("[verifyTopic] LLM API unavailable or rate-limited. Using pedagogical verification fallback:", errMsg);
 
     return {
       accurate: true,
@@ -259,8 +336,6 @@ export async function breakdownScript(
   styleBible: StyleBible
 ): Promise<Shot[]> {
   try {
-    const ai = getGeminiClient();
-
     const styleBiblePayload = {
       visual_style: styleBible.visual_style || styleBible.visualStyle || "",
       color_palette: styleBible.color_palette || styleBible.colorPalette || "",
@@ -268,39 +343,22 @@ export async function breakdownScript(
       recurring_motifs: styleBible.recurring_motifs || styleBible.recurringMotifs || "",
     };
 
-    const content = await fetchWithTimeout(
-      async () => {
-        const response = await ai.models.generateContent({
-          model: PRIMARY_MODEL,
-          contents: [
-            {
-              role: "user",
-              parts: [
-                {
-                  text: `TOPIC: ${topic}\nDESCRIPTION: ${description}\nANALYSIS REPORT: ${analysisReport}\nSTYLE BIBLE: ${JSON.stringify(
-                    styleBiblePayload
-                  )}`,
-                },
-              ],
-            },
-          ],
-          config: {
-            systemInstruction: BREAKDOWN_SCRIPT_SYSTEM_PROMPT,
-            responseMimeType: "application/json",
-            temperature: 0.5,
-          },
-        });
-        return response.text;
-      },
+    const userPrompt = `TOPIC: ${topic}\nDESCRIPTION: ${description}\nANALYSIS REPORT: ${analysisReport}\nSTYLE BIBLE: ${JSON.stringify(
+      styleBiblePayload
+    )}`;
+
+    const content = await generateLlmJsonContent(
+      BREAKDOWN_SCRIPT_SYSTEM_PROMPT,
+      userPrompt,
       30,
       "breakdownScript"
     );
 
     if (!content) {
-      throw new LLMError("Gemini returned an empty response for breakdownScript");
+      throw new LLMError("LLM returned an empty response for breakdownScript");
     }
 
-    console.log("[breakdownScript Raw Gemini Response]:\n", content);
+    console.log("[breakdownScript LLM Response]:\n", content);
 
     const rawJson = JSON.parse(content);
     const parsed = BreakdownScriptZodSchema.safeParse(rawJson);
@@ -323,7 +381,7 @@ export async function breakdownScript(
     }));
   } catch (error) {
     const errMsg = error instanceof Error ? error.message : String(error);
-    console.warn("[breakdownScript] Gemini API unavailable or rate-limited. Using narrative-arc script fallback:", errMsg);
+    console.warn("[breakdownScript] LLM API unavailable or rate-limited. Using narrative-arc script fallback:", errMsg);
 
     const artStyle = styleBible.visual_style || styleBible.visualStyle || "Clean 2D vector illustration, soft shadows";
     const palette = styleBible.color_palette || styleBible.colorPalette || "Warm amber, deep slate blue, crisp white";
@@ -368,8 +426,6 @@ export async function regenerateShotPrompts(
   feedback?: string
 ): Promise<{ imagePrompt: string; videoPrompt: string }> {
   try {
-    const ai = getGeminiClient();
-
     const styleBiblePayload = {
       visual_style: styleBible.visual_style || styleBible.visualStyle || "",
       color_palette: styleBible.color_palette || styleBible.colorPalette || "",
@@ -377,39 +433,22 @@ export async function regenerateShotPrompts(
       recurring_motifs: styleBible.recurring_motifs || styleBible.recurringMotifs || "",
     };
 
-    const content = await fetchWithTimeout(
-      async () => {
-        const response = await ai.models.generateContent({
-          model: PRIMARY_MODEL,
-          contents: [
-            {
-              role: "user",
-              parts: [
-                {
-                  text: `NARRATION: ${narration}\nSTYLE BIBLE: ${JSON.stringify(
-                    styleBiblePayload
-                  )}\nFEEDBACK: ${feedback || "None"}`,
-                },
-              ],
-            },
-          ],
-          config: {
-            systemInstruction: REGENERATE_SHOT_PROMPTS_SYSTEM_PROMPT,
-            responseMimeType: "application/json",
-            temperature: 0.5,
-          },
-        });
-        return response.text;
-      },
+    const userPrompt = `NARRATION: ${narration}\nSTYLE BIBLE: ${JSON.stringify(
+      styleBiblePayload
+    )}\nFEEDBACK: ${feedback || "None"}`;
+
+    const content = await generateLlmJsonContent(
+      REGENERATE_SHOT_PROMPTS_SYSTEM_PROMPT,
+      userPrompt,
       25,
       "regenerateShotPrompts"
     );
 
     if (!content) {
-      throw new LLMError("Gemini returned an empty response for regenerateShotPrompts");
+      throw new LLMError("LLM returned an empty response for regenerateShotPrompts");
     }
 
-    console.log("[regenerateShotPrompts Raw Gemini Response]:\n", content);
+    console.log("[regenerateShotPrompts LLM Response]:\n", content);
 
     const rawJson = JSON.parse(content);
     const parsed = RegenerateShotPromptsZodSchema.safeParse(rawJson);
@@ -427,7 +466,7 @@ export async function regenerateShotPrompts(
     };
   } catch (error) {
     const errMsg = error instanceof Error ? error.message : String(error);
-    console.warn("[regenerateShotPrompts] Gemini API unavailable or rate-limited. Using prompt fallback:", errMsg);
+    console.warn("[regenerateShotPrompts] LLM API unavailable or rate-limited. Using prompt fallback:", errMsg);
 
     const artStyle = styleBible.visual_style || styleBible.visualStyle || "Clean 2D vector illustration, soft shadows";
 
