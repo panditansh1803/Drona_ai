@@ -33,6 +33,13 @@ export default function StudioPage() {
   // Poll real backend project state every 2s
   const { project } = useProjectStatus(projectId);
 
+  // Derive the effective displayed tab:
+  // When backend finishes asset generation (READY_FOR_REVIEW) while the user
+  // is still on the Script tab (2), automatically render the Asset Studio (3).
+  // Pure derivation — avoids calling setState() inside a useEffect.
+  const effectiveTab =
+    activeTab === 2 && project?.status === "READY_FOR_REVIEW" ? 3 : activeTab;
+
   // Map backend shots to UI Shot interface
   const realShots: Shot[] =
     projectId && project?.shots
@@ -71,7 +78,7 @@ export default function StudioPage() {
           <Button
             key={label}
             size="sm"
-            variant={activeTab === index ? "default" : "outline"}
+            variant={effectiveTab === index ? "default" : "outline"}
             className="rounded-full text-xs"
             onClick={() => setActiveTab(index)}
           >
@@ -95,7 +102,7 @@ export default function StudioPage() {
 
       {/* ─── Content Area ─── */}
       <div className="mt-4 rounded-xl border p-5">
-        {activeTab === 0 && (
+        {effectiveTab === 0 && (
           <TopicInputScreen
             onSubmit={async (topic, description) => {
               const res = await createProject(topic, description);
@@ -105,7 +112,7 @@ export default function StudioPage() {
           />
         )}
 
-        {activeTab === 1 && (
+        {effectiveTab === 1 && (
           <AnalysisScreen
             report={analysisReport}
             suggestions={analysisSuggestions}
@@ -117,6 +124,8 @@ export default function StudioPage() {
                   console.error("Approve topic error:", err);
                 }
               }
+              // Advance immediately — breakdownScript runs in background on server.
+              // ScriptScreen shows a spinner until shots appear via polling.
               setActiveTab(2);
             }}
             onReject={async (feedback) => {
@@ -131,7 +140,7 @@ export default function StudioPage() {
           />
         )}
 
-        {activeTab === 2 && (
+        {effectiveTab === 2 && (
           <ScriptScreen
             shots={realShots}
             onAccept={async () => {
@@ -147,7 +156,7 @@ export default function StudioPage() {
           />
         )}
 
-        {activeTab === 3 && (
+        {effectiveTab === 3 && (
           <AssetStudioScreen
             shots={realShots}
             onRunAsset={async (shotId, type) => {
@@ -168,7 +177,7 @@ export default function StudioPage() {
           />
         )}
 
-        {activeTab === 4 && (
+        {effectiveTab === 4 && (
           <PreviewScreen
             videoUrl={finalVideoUrl}
             onDownload={() => {

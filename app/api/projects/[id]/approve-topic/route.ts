@@ -15,21 +15,31 @@ export async function POST(
       where: { project_id: id },
     });
 
-    if (project) {
-      await prisma.project.update({
-        where: { project_id: id },
-        data: { status: "SCRIPT_GENERATION" },
-      });
+    if (!project) {
+      return NextResponse.json({ error: "Project not found" }, { status: 404 });
+    }
 
-      const analysisObj = (project.analysis as { report?: string; style_bible?: StyleBible; styleBible?: StyleBible }) || {};
-      const analysisReport = analysisObj.report || "";
-      const styleBible: StyleBible = analysisObj.style_bible || analysisObj.styleBible || {
-        visual_style: "Clean 2D vector illustration, soft shadows",
-        color_palette: "Warm amber, deep slate blue, crisp white",
-        tone: "Clear, engaging, museum-exhibit curiosity",
-        recurring_motifs: "minimalist geometric frames",
-      };
+    // 1. Immediately mark as SCRIPT_GENERATION — UI will show "Generating script…"
+    await prisma.project.update({
+      where: { project_id: id },
+      data: { status: "SCRIPT_GENERATION" },
+    });
 
+    // 2. Respond to the client NOW — don't block on the Gemini call
+    //    The background task below will flip status to AWAITING_SCRIPT_APPROVAL
+    //    when complete, and the polling hook in the UI will pick it up.
+    const analysisObj =
+      (project.analysis as { report?: string; style_bible?: StyleBible; styleBible?: StyleBible }) || {};
+    const analysisReport = analysisObj.report || "";
+    const styleBible: StyleBible = analysisObj.style_bible || analysisObj.styleBible || {
+      visual_style: "Clean 2D vector illustration, soft shadows",
+      color_palette: "Warm amber, deep slate blue, crisp white",
+      tone: "Clear, engaging, museum-exhibit curiosity",
+      recurring_motifs: "minimalist geometric frames",
+    };
+
+    // Fire-and-forget — runs after response is sent
+    setImmediate(async () => {
       try {
         const generatedShots = await breakdownScript(
           project.topic_name,
@@ -60,11 +70,15 @@ export async function POST(
           where: { project_id: id },
           data: { status: "AWAITING_SCRIPT_APPROVAL" },
         });
-      } catch (err) {
-        console.warn("[POST approve-topic] Script breakdown warning:", err);
-      }
-    }
 
+        console.log(`[approve-topic] Script generated: ${generatedShots.length} shots for project ${id}`);
+      } catch (err) {
+        console.error("[approve-topic] Background breakdownScript error:", err);
+        // Leave status as SCRIPT_GENERATION — ScriptScreen will show the loading spinner
+      }
+    });
+
+    // 3. Try sending Inngest event (non-blocking, best-effort)
     try {
       await inngest.send({
         name: "project/topic-approved",

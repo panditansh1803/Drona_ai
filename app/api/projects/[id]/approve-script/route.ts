@@ -40,52 +40,62 @@ export async function POST(
       console.warn("[approve-script] Inngest dispatch warning:", inngestErr);
     }
 
-    // 3. Generate shot assets for each shot in project
-    for (const shot of project.shots) {
-      try {
-        console.log(`[approve-script] Generating assets for Shot #${shot.number}...`);
+    // 3. Generate all shot assets in PARALLEL — not sequentially.
+    //    Each shot independently generates voiceover + image (concurrently),
+    //    then video, then saves to DB.
+    console.log(`[approve-script] Starting parallel asset generation for ${project.shots.length} shots...`);
+    const startTime = Date.now();
 
-        // a. Generate voiceover and image concurrently
-        const [voiceover, imageUrl] = await Promise.all([
-          generateVoiceover(shot.text),
-          generateShotImage(shot.image_prompt || shot.text),
-        ]);
+    await Promise.all(
+      project.shots.map(async (shot) => {
+        try {
+          console.log(`[approve-script] Shot #${shot.number} starting...`);
 
-        // b. Generate video using the generated image
-        const rawVideoUrl = await generateShotVideo(
-          shot.video_prompt || "Slow motion movement",
-          shot.duration_seconds,
-          imageUrl
-        );
+          // a. Voiceover + image concurrently
+          const [voiceover, imageUrl] = await Promise.all([
+            generateVoiceover(shot.text),
+            generateShotImage(shot.image_prompt || shot.text),
+          ]);
 
-        // c. Match video duration to voiceover duration
-        const alignedVideoUrl = await matchVideoDuration(
-          rawVideoUrl,
-          voiceover.durationSeconds,
-          shot.duration_seconds
-        );
+          // b. Video (uses generated image as source)
+          const rawVideoUrl = await generateShotVideo(
+            shot.video_prompt || "Slow motion movement",
+            shot.duration_seconds,
+            imageUrl
+          );
 
-        // d. Build caption cues from word timestamps
-        const captionCues = buildCaptionCues(voiceover.wordTimestamps);
+          // c. Duration alignment
+          const alignedVideoUrl = await matchVideoDuration(
+            rawVideoUrl,
+            voiceover.durationSeconds,
+            shot.duration_seconds
+          );
 
-        // e. Save all generated assets to database for this shot
-        await prisma.shot.update({
-          where: { shot_id: shot.shot_id },
-          data: {
-            generated_image_url: imageUrl,
-            generated_video_url: alignedVideoUrl,
-            generated_voiceover_url: voiceover.audioUrl,
-            voiceover_duration_seconds: voiceover.durationSeconds,
-            word_timestamps: JSON.stringify(voiceover.wordTimestamps),
-            caption_cues: JSON.stringify(captionCues),
-          },
-        });
+          // d. Caption cues
+          const captionCues = buildCaptionCues(voiceover.wordTimestamps);
 
-        console.log(`[approve-script] Shot #${shot.number} assets generated successfully!`);
-      } catch (shotErr) {
-        console.error(`[approve-script] Error generating assets for Shot #${shot.number}:`, shotErr);
-      }
-    }
+          // e. Persist
+          await prisma.shot.update({
+            where: { shot_id: shot.shot_id },
+            data: {
+              generated_image_url: imageUrl,
+              generated_video_url: alignedVideoUrl,
+              generated_voiceover_url: voiceover.audioUrl,
+              voiceover_duration_seconds: voiceover.durationSeconds,
+              word_timestamps: JSON.stringify(voiceover.wordTimestamps),
+              caption_cues: JSON.stringify(captionCues),
+            },
+          });
+
+          console.log(`[approve-script] Shot #${shot.number} done.`);
+        } catch (shotErr) {
+          console.error(`[approve-script] Shot #${shot.number} error:`, shotErr);
+        }
+      })
+    );
+
+    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+    console.log(`[approve-script] All ${project.shots.length} shots generated in ${elapsed}s.`);
 
     // 4. Update project status to READY_FOR_REVIEW
     await prisma.project.update({

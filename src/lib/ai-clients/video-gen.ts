@@ -1,9 +1,11 @@
 import { GoogleGenAI } from "@google/genai";
 import path from "path";
+import os from "os";
 import fs from "fs";
 import { exec } from "child_process";
 import { promisify } from "util";
 import { saveGeneratedFile } from "@/src/lib/storage/local";
+import { renderStillToVideo } from "@/src/lib/video/still-to-video";
 
 const execAsync = promisify(exec);
 
@@ -273,12 +275,32 @@ export async function generateShotVideo(
       }
     }
 
-    // Default fallback mock video URL if no API keys are present
-    const fallbackUrl = sourceImageUrl || "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4";
-    console.log(
-      `[VideoGen Success - Placeholder/Fallback] Prompt: "${prompt.slice(0, 60)}..." | Path: ${fallbackUrl} | Size: N/A (placeholder)`
-    );
-    return fallbackUrl;
+    // ─── Ken Burns fallback: render real MP4 from still image using FFmpeg ───
+    const tmpFileName = `video_${Date.now()}_${Math.random().toString(36).substring(7)}.mp4`;
+    const tmpPath = path.join(os.tmpdir(), tmpFileName);
+
+    try {
+      await renderStillToVideo(sourceImageUrl, durationSeconds, tmpPath);
+
+      if (fs.existsSync(tmpPath) && fs.statSync(tmpPath).size > 0) {
+        const videoBuffer = fs.readFileSync(tmpPath);
+        try { fs.unlinkSync(tmpPath); } catch { /* ignore cleanup error */ }
+
+        const videoUrl = await saveGeneratedFile(videoBuffer, tmpFileName, "videos", "video/mp4");
+
+        console.log(
+          `[VideoGen Success - Ken Burns] Prompt: "${prompt.slice(0, 60)}..." | URL: ${videoUrl} | Size: ${videoBuffer.length} bytes`
+        );
+        return videoUrl;
+      }
+    } catch (kenBurnsErr) {
+      console.warn("[VideoGen] Ken Burns render failed:", (kenBurnsErr as Error).message?.slice(0, 120));
+    }
+
+    // Last-resort URL fallback (should never reach here after FFmpeg is installed)
+    const lastResortUrl = sourceImageUrl || "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4";
+    console.warn(`[VideoGen Fallback] Could not render video. Returning URL: ${lastResortUrl}`);
+    return lastResortUrl;
   } catch (error) {
     if (error instanceof VideoGenError) throw error;
     throw new VideoGenError("Failed to generate video", error);
