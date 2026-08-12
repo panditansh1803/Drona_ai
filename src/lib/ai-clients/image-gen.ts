@@ -1,6 +1,7 @@
 import fs from "fs";
 import path from "path";
 import { saveGeneratedFile } from "@/src/lib/storage/local";
+import { getEnvVar } from "@/src/lib/env";
 
 export class ImageGenError extends Error {
   constructor(message: string, public override cause?: unknown) {
@@ -10,22 +11,10 @@ export class ImageGenError extends Error {
 }
 
 function getWavespeedApiKey(): string {
-  let apiKey = process.env.WAVESPEED_API_KEY;
-  if (!apiKey) {
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const dotenv = require("dotenv");
-      dotenv.config({ path: ".env.local" });
-      apiKey = process.env.WAVESPEED_API_KEY;
-    } catch {
-      /* ignore dotenv load error */
-    }
-  }
-
+  const apiKey = getEnvVar("WAVESPEED_API_KEY");
   if (!apiKey) {
     throw new ImageGenError("WAVESPEED_API_KEY environment variable is missing");
   }
-
   return apiKey;
 }
 

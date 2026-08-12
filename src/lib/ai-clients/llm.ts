@@ -92,21 +92,12 @@ const RegenerateShotPromptsZodSchema = z.object({
 
 // ─── Anthropic Client & Timeout Helper ────────────────────────────────────────
 
+import { getEnvVar } from "@/src/lib/env";
+
 const MODEL_ID = "claude-haiku-4-5-20251001";
 
 function getAnthropicClient(): Anthropic {
-  let apiKey = process.env.ANTHROPIC_API_KEY;
-
-  if (!apiKey) {
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const dotenv = require("dotenv");
-      dotenv.config({ path: ".env.local" });
-      apiKey = process.env.ANTHROPIC_API_KEY;
-    } catch {
-      /* ignore dotenv load error */
-    }
-  }
+  const apiKey = getEnvVar("ANTHROPIC_API_KEY");
 
   if (!apiKey) {
     throw new LLMError("ANTHROPIC_API_KEY environment variable is missing");

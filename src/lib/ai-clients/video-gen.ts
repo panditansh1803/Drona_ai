@@ -3,6 +3,7 @@ import fs from "fs";
 import { exec } from "child_process";
 import { promisify } from "util";
 import { saveGeneratedFile } from "@/src/lib/storage/local";
+import { getEnvVar } from "@/src/lib/env";
 
 const execAsync = promisify(exec);
 
@@ -14,22 +15,10 @@ export class VideoGenError extends Error {
 }
 
 function getWavespeedApiKey(): string {
-  let apiKey = process.env.WAVESPEED_API_KEY;
-  if (!apiKey) {
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const dotenv = require("dotenv");
-      dotenv.config({ path: ".env.local" });
-      apiKey = process.env.WAVESPEED_API_KEY;
-    } catch {
-      /* ignore dotenv load error */
-    }
-  }
-
+  const apiKey = getEnvVar("WAVESPEED_API_KEY");
   if (!apiKey) {
     throw new VideoGenError("WAVESPEED_API_KEY environment variable is missing");
   }
-
   return apiKey;
 }
 
@@ -38,7 +27,7 @@ function resolvePublicImageUrl(imageUrl?: string | null): string {
   if (imageUrl.startsWith("http://") || imageUrl.startsWith("https://")) {
     return imageUrl;
   }
-  const baseUrl = process.env.R2_PUBLIC_URL || process.env.APP_URL || "http://localhost:3000";
+  const baseUrl = getEnvVar("R2_PUBLIC_URL") || getEnvVar("APP_URL") || "http://localhost:3000";
   return `${baseUrl.replace(/\/$/, "")}/${imageUrl.replace(/^\//, "")}`;
 }
 

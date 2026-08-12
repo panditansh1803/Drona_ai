@@ -1,4 +1,5 @@
 import { saveGeneratedFile } from "@/src/lib/storage/local";
+import { getEnvVar } from "@/src/lib/env";
 
 export class VoiceGenError extends Error {
   constructor(message: string, public override cause?: unknown) {
@@ -20,7 +21,7 @@ export interface VoiceoverResult {
 }
 
 export async function generateVoiceover(text: string): Promise<VoiceoverResult> {
-  const apiKey = process.env.ELEVENLABS_API_KEY;
+  const apiKey = getEnvVar("ELEVENLABS_API_KEY");
 
   if (!apiKey) {
     console.log(`[VoiceGen Dev Fallback] ELEVENLABS_API_KEY missing. Generating mock audio file for "${text.slice(0, 40)}..."`);
