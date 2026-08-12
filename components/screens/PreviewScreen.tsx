@@ -1,7 +1,7 @@
 "use client";
 
 import { Button } from "@/components/ui/button";
-import { PlayCircleIcon, DownloadIcon, RefreshCwIcon } from "lucide-react";
+import { DownloadIcon, RefreshCwIcon, FilmIcon } from "lucide-react";
 
 interface PreviewScreenProps {
   videoUrl?: string;
@@ -15,36 +15,58 @@ export default function PreviewScreen({
   onRevise,
 }: PreviewScreenProps) {
   return (
-    <div className="mx-auto flex w-full max-w-xl flex-col gap-5">
+    <div className="mx-auto flex w-full max-w-xl flex-col gap-6">
       {/* ─── Heading ─── */}
-      <h2 className="text-sm font-medium">Final preview and export</h2>
+      <div className="flex flex-col gap-1">
+        <h2 className="text-base font-semibold text-[#F3F4F6]">Final Preview and Export</h2>
+        <p className="text-xs text-[#737D8C]">
+          Watch your rendered multi-modal video lesson composition and export the final output file.
+        </p>
+      </div>
 
-      {/* ─── Video display ─── */}
-      <div className="flex h-44 items-center justify-center overflow-hidden rounded-lg bg-muted">
+      {/* ─── Video Display Frame ─── */}
+      <div className="relative flex aspect-video w-full items-center justify-center overflow-hidden rounded-xl border border-[#263241] bg-[#0B0F14] shadow-2xl shadow-black/80">
         {videoUrl ? (
           <video
             src={videoUrl}
             controls
             autoPlay
-            className="h-full w-full rounded-lg bg-black object-contain"
+            className="h-full w-full object-contain"
           />
         ) : (
-          <div className="flex flex-col items-center gap-2 text-muted-foreground">
-            <PlayCircleIcon className="size-10" />
-            <span className="text-xs">Final video render preview</span>
+          <div className="flex flex-col items-center justify-center gap-3 text-[#737D8C] p-6 text-center">
+            <div className="flex size-14 items-center justify-center rounded-2xl bg-[#161D27] border border-[#263241] shadow-inner">
+              <FilmIcon className="size-7 text-indigo-400" />
+            </div>
+            <div className="flex flex-col gap-1">
+              <span className="text-sm font-medium text-[#F3F4F6]">
+                Final Video Composition Render
+              </span>
+              <span className="text-xs text-[#737D8C]">
+                Click below to request Remotion composition render
+              </span>
+            </div>
           </div>
         )}
       </div>
 
       {/* ─── Actions ─── */}
-      <div className="flex items-center gap-2">
-        <Button className="gap-1.5" onClick={onDownload} disabled={!videoUrl}>
-          <DownloadIcon className="size-3.5" />
-          Download
+      <div className="flex flex-wrap items-center gap-3 pt-2">
+        <Button
+          onClick={onDownload}
+          disabled={!videoUrl}
+          className="bg-indigo-600 hover:bg-indigo-500 text-white font-medium shadow-md shadow-indigo-600/20 gap-2 px-5 py-2"
+        >
+          <DownloadIcon className="size-4" />
+          Download Rendered Video
         </Button>
-        <Button variant="outline" className="gap-1.5" onClick={onRevise}>
-          <RefreshCwIcon className="size-3.5" />
-          Revise
+        <Button
+          variant="outline"
+          onClick={onRevise}
+          className="bg-[#161D27] border-[#263241] text-[#A7B0BE] hover:bg-[#1B2430] hover:text-[#F3F4F6] gap-2"
+        >
+          <RefreshCwIcon className="size-4" />
+          Revise Asset Studio
         </Button>
       </div>
     </div>

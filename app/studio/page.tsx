@@ -71,37 +71,66 @@ export default function StudioPage() {
     undefined;
 
   return (
-    <div className="mx-auto w-full max-w-6xl px-6 py-8">
-      {/* ─── Tab Navigation ─── */}
-      <nav className="flex items-center gap-1.5">
-        {TABS.map((label, index) => (
-          <Button
-            key={label}
-            size="sm"
-            variant={effectiveTab === index ? "default" : "outline"}
-            className="rounded-full text-xs"
-            onClick={() => setActiveTab(index)}
-          >
-            {label}
-          </Button>
-        ))}
+    <div className="mx-auto w-full max-w-6xl px-6 py-8 flex flex-col gap-6">
+      {/* ─── Header & Brand ─── */}
+      <header className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-4 border-b border-[#263241]">
+        <div className="flex items-center gap-3">
+          <div className="flex size-9 items-center justify-center rounded-lg bg-indigo-600/20 border border-indigo-500/30 text-indigo-400 font-bold text-lg shadow-sm">
+            D
+          </div>
+          <div>
+            <h1 className="text-base font-semibold text-[#F3F4F6] tracking-tight">
+              Drona AI Studio
+            </h1>
+            <p className="text-xs text-[#737D8C]">
+              Pedagogical Video Creation Workflow
+            </p>
+          </div>
+        </div>
+
+        {/* ─── Status Badge ─── */}
+        {project ? (
+          <div className="flex items-center gap-3 rounded-lg bg-[#161D27] border border-[#263241] px-3.5 py-1.5 text-xs text-[#A7B0BE]">
+            <span className="truncate max-w-[200px]">
+              Topic: <strong className="text-[#F3F4F6] font-medium">{project.topic_name}</strong>
+            </span>
+            <div className="h-3 w-px bg-[#263241]" />
+            <span className="inline-flex items-center gap-1.5 shrink-0">
+              <span className="size-2 rounded-full bg-emerald-400 animate-pulse" />
+              Status: <span className="font-semibold text-[#F3F4F6]">{project.status}</span>
+            </span>
+          </div>
+        ) : (
+          <div className="text-xs text-[#737D8C] hidden sm:block">
+            Ready to generate new topic
+          </div>
+        )}
+      </header>
+
+      {/* ─── Step Navigation ─── */}
+      <nav className="flex items-center gap-2 overflow-x-auto pb-1 scrollbar-none">
+        {TABS.map((label, index) => {
+          const isActive = effectiveTab === index;
+          return (
+            <Button
+              key={label}
+              size="sm"
+              variant={isActive ? "default" : "outline"}
+              className={`rounded-full text-xs font-medium px-4 py-1.5 transition-all shrink-0 ${
+                isActive
+                  ? "bg-indigo-600 hover:bg-indigo-500 text-white shadow-md shadow-indigo-600/20 border-transparent"
+                  : "bg-[#111720] border-[#263241] text-[#A7B0BE] hover:bg-[#161D27] hover:text-[#F3F4F6]"
+              }`}
+              onClick={() => setActiveTab(index)}
+            >
+              {label}
+            </Button>
+          );
+        })}
       </nav>
 
-      {/* ─── Status Indicator ─── */}
-      {project && (
-        <div className="mt-3 flex items-center justify-between rounded-lg bg-muted/60 px-4 py-2 text-xs text-muted-foreground">
-          <span>
-            Topic: <strong className="text-foreground">{project.topic_name}</strong>
-          </span>
-          <span className="inline-flex items-center gap-1.5">
-            <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
-            Status: <span className="font-semibold text-foreground">{project.status}</span>
-          </span>
-        </div>
-      )}
-
-      {/* ─── Content Area ─── */}
-      <div className="mt-4 rounded-xl border p-5">
+      {/* ─── Content Surface ─── */}
+      <main className="rounded-xl border border-[#263241] bg-[#111720] p-6 shadow-xl shadow-black/40">
         {effectiveTab === 0 && (
           <TopicInputScreen
             onSubmit={async (topic, description) => {
@@ -124,8 +153,6 @@ export default function StudioPage() {
                   console.error("Approve topic error:", err);
                 }
               }
-              // Advance immediately — breakdownScript runs in background on server.
-              // ScriptScreen shows a spinner until shots appear via polling.
               setActiveTab(2);
             }}
             onReject={async (feedback) => {
@@ -190,7 +217,7 @@ export default function StudioPage() {
             }}
           />
         )}
-      </div>
+      </main>
     </div>
   );
 }

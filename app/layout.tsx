@@ -14,16 +14,18 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "Drona AI — Studio",
-  description: "AI-powered content creation studio",
+  description: "AI-powered pedagogical video creation studio",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html
       lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      className={`${geistSans.variable} ${geistMono.variable} dark h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col">{children}</body>
+      <body className="min-h-full flex flex-col bg-[#0B0F14] text-[#F3F4F6] selection:bg-indigo-500/30 selection:text-indigo-200">
+        {children}
+      </body>
     </html>
   );
 }
