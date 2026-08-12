@@ -18,9 +18,13 @@ export async function POST(
 
     if (project && feedback) {
       try {
+        const fullContext = project.description
+          ? `${project.description}\nFeedback for revision: ${feedback}`
+          : `Feedback for revision: ${feedback}`;
+
         const reVerification = await verifyTopic(
           project.topic_name,
-          `Feedback for revision: ${feedback}`
+          fullContext
         );
 
         await prisma.project.update({

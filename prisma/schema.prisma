@@ -10,12 +10,13 @@ datasource db {
 }
 
 model Project {
-  project_id String   @id @default(cuid())
-  status     String   @default("DRAFT")
-  topic_name String
-  analysis   String? // JSON stored as string for SQLite compatibility
-  created_at DateTime @default(now())
-  updated_at DateTime @updatedAt
+  project_id  String   @id @default(cuid())
+  status      String   @default("DRAFT")
+  topic_name  String
+  description String   @default("")
+  analysis    String? // JSON stored as string for SQLite compatibility
+  created_at  DateTime @default(now())
+  updated_at  DateTime @updatedAt
 
   shots Shot[]
 

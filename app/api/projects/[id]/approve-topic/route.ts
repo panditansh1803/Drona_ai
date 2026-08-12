@@ -43,10 +43,10 @@ export async function POST(
       recurring_motifs: "minimalist geometric frames",
     };
 
-    // 3. Generate script breakdown shots synchronously so shots exist before response returns
+    // 3. Generate script breakdown shots using the real stored description
     const generatedShots = await breakdownScript(
       project.topic_name,
-      project.topic_name,
+      project.description,
       analysisReport,
       styleBible
     );

@@ -111,7 +111,7 @@ export const generateProject = inngest.createFunction(
 
       const generatedShots = await breakdownScript(
         topic,
-        currentDescription,
+        project?.description || currentDescription,
         analysisReport,
         styleBible
       );

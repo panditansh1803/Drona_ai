@@ -14,7 +14,7 @@ export async function POST(request: Request) {
       );
     }
 
-    // 1. Perform immediate pedagogical verification analysis via Gemini
+    // 1. Perform immediate pedagogical verification analysis via Claude
     let verification;
     try {
       verification = await verifyTopic(topic, description);
@@ -22,7 +22,7 @@ export async function POST(request: Request) {
       const errMsg = err instanceof Error ? err.message : String(err);
       console.error("[POST /api/projects] verifyTopic failed:", errMsg);
       return NextResponse.json(
-        { error: `Gemini Analysis Error: ${errMsg}` },
+        { error: `LLM Analysis Error: ${errMsg}` },
         { status: 500 }
       );
     }
@@ -34,10 +34,11 @@ export async function POST(request: Request) {
       style_bible: verification.styleBible,
     };
 
-    // 2. Persist project and analysis report to SQLite
+    // 2. Persist project and analysis report to SQLite (storing topic_name and description)
     const project = await prisma.project.create({
       data: {
         topic_name: topic,
+        description: description,
         status: "AWAITING_APPROVAL",
         analysis: JSON.stringify(analysisData),
       },
