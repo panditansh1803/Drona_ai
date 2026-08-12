@@ -85,7 +85,9 @@ Return ONLY valid raw JSON with NO markdown codeblocks:
 
 const StyleBibleZodSchema = z.object({
   visual_style: z.string(),
-  color_palette: z.string(),
+  color_palette: z.union([z.string(), z.array(z.string())]).transform((val) =>
+    Array.isArray(val) ? val.join(", ") : val
+  ),
   tone: z.string(),
   recurring_motifs: z.string(),
 });
@@ -182,7 +184,7 @@ async function generateLlmJsonContent(
 
   // 1. Anthropic Claude path if ANTHROPIC_API_KEY is configured
   if (anthropicKey) {
-    console.log(`[LLM Thinking Engine] Calling Anthropic Claude (claude-sonnet-4-6) for ${actionName}...`);
+    console.log(`[LLM Thinking Engine] Calling Anthropic Claude (claude-haiku-4-5) for ${actionName}...`);
 
     const rawText = await fetchWithTimeout(
       async () => {
@@ -194,7 +196,7 @@ async function generateLlmJsonContent(
             "content-type": "application/json",
           },
           body: JSON.stringify({
-            model: "claude-sonnet-4-6",
+            model: "claude-haiku-4-5",
             max_tokens: 4096,
             system: systemPrompt,
             messages: [{ role: "user", content: userPrompt }],
