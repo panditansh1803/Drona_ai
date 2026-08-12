@@ -93,9 +93,10 @@ export async function POST(
 
     return NextResponse.json({ error: "Unknown assetType" }, { status: 400 });
   } catch (error) {
+    const errMsg = error instanceof Error ? error.message : "Failed to regenerate asset";
     console.error("[POST /api/projects/[id]/shots/[shotId]/regenerate] Error:", error);
     return NextResponse.json(
-      { error: "Failed to regenerate asset" },
+      { error: errMsg },
       { status: 500 }
     );
   }
