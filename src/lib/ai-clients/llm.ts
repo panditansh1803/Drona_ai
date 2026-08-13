@@ -57,7 +57,7 @@ Submit your structured response using the submit_shot_prompts tool.`;
 
 // ─── Zod Schemas for Validation ──────────────────────────────────────────────
 
-const StyleBibleZodSchema = z.object({
+const RawStyleBibleSchema = z.object({
   visual_style: z.string(),
   color_palette: z.union([z.string(), z.array(z.string())]).transform((val) =>
     Array.isArray(val) ? val.join(", ") : val
@@ -65,6 +65,17 @@ const StyleBibleZodSchema = z.object({
   tone: z.string(),
   recurring_motifs: z.string(),
 });
+
+const StyleBibleZodSchema = z.preprocess((val) => {
+  if (typeof val === "string") {
+    try {
+      return JSON.parse(val);
+    } catch {
+      return val;
+    }
+  }
+  return val;
+}, RawStyleBibleSchema);
 
 const VerifyTopicZodSchema = z.object({
   accurate: z.boolean(),
