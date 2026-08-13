@@ -74,5 +74,16 @@ export async function requestRender(projectId: string): Promise<{ success: boole
 
 export async function getProjectState(projectId: string) {
   const res = await fetch(`/api/projects/${projectId}`);
-  return handleResponse(res, "Failed to fetch project state");
+  const data = await handleResponse<{ project?: { status: string; shots?: { shot_id: string; generated_image_url?: string | null; generated_video_url?: string | null; generated_voiceover_url?: string | null }[] } }>(res, "Failed to fetch project state");
+
+  // Diagnostic: log the response shape once to verify URL fields arrive from the database
+  if (data?.project?.shots?.length) {
+    const sample = data.project.shots[0];
+    console.log(
+      `[getProjectState] project.status=${data.project.status} | shots=${data.project.shots.length}`,
+      `| shot[0] urls: img=${sample.generated_image_url ?? "null"} vid=${sample.generated_video_url ?? "null"} vo=${sample.generated_voiceover_url ?? "null"}`
+    );
+  }
+
+  return data;
 }

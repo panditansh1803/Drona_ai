@@ -30,12 +30,18 @@ interface AssetCardProps {
   shotId: string;
   type: AssetType;
   status: AssetStatus;
+  /** The real generated URL from the database — always passed, regardless of local status state */
   assetUrl?: string | null;
   onRun: (shotId: string, type: AssetType) => void;
 }
 
 function AssetCard({ shotId, type, status, assetUrl, onRun }: AssetCardProps) {
   const { label, Icon } = ASSET_META[type];
+
+  // Show preview whenever a real URL exists — even if the local status hasn't
+  // been set to "done" yet (e.g. pre-populated by Inngest or from a previous session).
+  const showPreview = Boolean(assetUrl);
+  const isDone = status === "done" || showPreview;
 
   return (
     <div className="flex flex-1 flex-col justify-between rounded-lg border border-[#263241] bg-[#111720] p-3 gap-2 min-h-[90px] transition-all hover:border-[#38bdf8]/30 shadow-sm">
@@ -49,7 +55,7 @@ function AssetCard({ shotId, type, status, assetUrl, onRun }: AssetCardProps) {
         {status === "loading" && (
           <LoaderCircleIcon className="size-3.5 animate-spin text-indigo-400" />
         )}
-        {status === "done" && (
+        {isDone && status !== "loading" && (
           <div className="flex items-center gap-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 px-1.5 py-0.5 text-[10px] text-emerald-400 font-medium">
             <CheckIcon className="size-3" />
             <span>Ready</span>
@@ -57,33 +63,51 @@ function AssetCard({ shotId, type, status, assetUrl, onRun }: AssetCardProps) {
         )}
       </div>
 
-      {/* Asset Preview Thumbnail or Audio Player */}
-      {status === "done" && assetUrl && (
-        <div className="mt-1 overflow-hidden rounded-md border border-[#263241] bg-[#0B0F14] text-[10px]">
+      {/* ── Asset Preview Thumbnail ── */}
+      {showPreview && assetUrl && (
+        <div className="mt-1 overflow-hidden rounded-md border border-[#263241] bg-[#0B0F14]">
           {type === "image" && (
             /* eslint-disable-next-line @next/next/no-img-element */
-            <img src={assetUrl} alt="Shot image keyframe" className="h-16 w-full object-cover" />
+            <img
+              src={assetUrl}
+              alt="Shot image keyframe"
+              className="h-16 w-full object-cover"
+            />
           )}
           {type === "video" && (
-            <div className="relative">
-              <video src={assetUrl} className="h-16 w-full object-cover" autoPlay muted loop />
-            </div>
+            <video
+              src={assetUrl}
+              className="h-16 w-full object-cover"
+              autoPlay
+              muted
+              loop
+              playsInline
+            />
           )}
           {type === "voiceover" && (
-            <div className="p-1">
-              <audio src={assetUrl} controls className="w-full h-8 text-xs accent-indigo-500" />
+            <div className="p-1.5">
+              <audio
+                src={assetUrl}
+                controls
+                className="w-full h-8 text-xs accent-indigo-500"
+              />
             </div>
           )}
         </div>
       )}
 
-      {/* Action button */}
+      {/* Loading skeleton while generating */}
+      {status === "loading" && !showPreview && (
+        <div className="mt-1 h-16 rounded-md border border-[#263241] bg-[#0B0F14] animate-pulse" />
+      )}
+
+      {/* Action button — always visible for regeneration */}
       <div className="flex justify-end pt-1">
         <Button
           size="sm"
-          variant={status === "done" ? "outline" : "default"}
+          variant={isDone ? "outline" : "default"}
           className={`h-6 px-2.5 text-[11px] font-medium transition-all ${
-            status === "done"
+            isDone
               ? "bg-[#161D27] border-[#263241] text-[#A7B0BE] hover:text-[#F3F4F6] hover:bg-[#1B2430]"
               : status === "loading"
               ? "bg-[#1B2430] text-[#737D8C]"
@@ -92,7 +116,7 @@ function AssetCard({ shotId, type, status, assetUrl, onRun }: AssetCardProps) {
           disabled={status === "loading"}
           onClick={() => onRun(shotId, type)}
         >
-          {status === "done" ? "Regenerate" : status === "loading" ? "Generating..." : "Generate"}
+          {isDone ? "Regenerate" : status === "loading" ? "Generating..." : "Generate"}
         </Button>
       </div>
     </div>
@@ -114,8 +138,10 @@ export default function AssetStudioScreen({ shots, onRunAsset, onComplete }: Ass
 
   const getStatus = (shot: Shot, type: AssetType): AssetStatus => {
     const key = makeKey(shot.id, type);
+    // Prefer local in-flight state (loading / just-done) over database state
     if (statuses[key]) return statuses[key]!;
 
+    // Fall back to database-backed URL presence
     if (type === "image" && shot.generatedImageUrl) return "done";
     if (type === "video" && shot.generatedVideoUrl) return "done";
     if (type === "voiceover" && shot.generatedVoiceoverUrl) return "done";
