@@ -22,13 +22,53 @@ function getWavespeedApiKey(): string {
   return apiKey;
 }
 
-function resolvePublicImageUrl(imageUrl?: string | null): string {
-  if (!imageUrl) return "";
+/**
+ * Resolves a source image URL or local path into the `image` field value
+ * that WaveSpeed's minimax/h3/image-to-video endpoint accepts.
+ *
+ * - Local mode (no R2 credentials): reads the image file from disk and returns
+ *   a base64 Data URI ("data:image/png;base64,...") — no public URL needed.
+ * - Production mode (R2 credentials present): falls back to constructing a
+ *   public URL via R2_PUBLIC_URL, since the file is already in R2.
+ *
+ * WaveSpeed documented format for base64: data:image/{ext};base64,{data}
+ */
+function resolveImageForVideoGen(imageUrl?: string | null): string | undefined {
+  if (!imageUrl) return undefined;
+
+  // Already a full public URL — use it directly (handles R2 CDN URLs)
   if (imageUrl.startsWith("http://") || imageUrl.startsWith("https://")) {
     return imageUrl;
   }
-  const baseUrl = getEnvVar("R2_PUBLIC_URL") || getEnvVar("APP_URL") || "http://localhost:3000";
-  return `${baseUrl.replace(/\/$/, "")}/${imageUrl.replace(/^\//, "")}`;
+
+  // Local relative path (/generated/images/...) — check if we're in local storage mode
+  const isLocalStorageMode = !process.env.R2_ACCESS_KEY_ID || !process.env.R2_SECRET_ACCESS_KEY || !process.env.R2_BUCKET_NAME;
+
+  if (isLocalStorageMode) {
+    // Derive disk path from relative URL (/generated/images/foo.png -> public/generated/images/foo.png)
+    const relativePath = imageUrl.startsWith("/") ? imageUrl.slice(1) : imageUrl;
+    const diskPath = path.join(process.cwd(), "public", relativePath);
+
+    if (fs.existsSync(diskPath)) {
+      const buffer = fs.readFileSync(diskPath);
+      const base64Data = buffer.toString("base64");
+      // Detect extension for MIME type
+      const ext = path.extname(diskPath).toLowerCase().replace(".", "") || "png";
+      const mime = ext === "jpg" || ext === "jpeg" ? "image/jpeg" : ext === "webp" ? "image/webp" : "image/png";
+      const dataUri = `data:${mime};base64,${base64Data}`;
+      console.log(`[VideoGen] Local image resolved to base64 Data URI (disk: ${diskPath}, size: ${buffer.length} bytes)`);
+      return dataUri;
+    } else {
+      console.warn(`[VideoGen] Local image not found on disk: ${diskPath}. Skipping image input.`);
+      return undefined;
+    }
+  }
+
+  // Production mode: construct public URL from R2_PUBLIC_URL or APP_URL
+  const baseUrl = getEnvVar("R2_PUBLIC_URL", false) || getEnvVar("APP_URL", false) || "http://localhost:3000";
+  const fullUrl = `${baseUrl.replace(/\/$/, "")}/${imageUrl.replace(/^\//, "")}`;
+  console.log(`[VideoGen] Resolved image to public URL: ${fullUrl}`);
+  return fullUrl;
 }
 
 /**
@@ -96,10 +136,14 @@ export async function generateShotVideo(
 
   // Clamp duration to MiniMax H3's valid range of 5-15 seconds
   const h3Duration = Math.max(5, Math.min(15, Math.round(durationSeconds)));
-  const publicImageUrl = resolvePublicImageUrl(sourceImageUrl);
+
+  // Resolve the image: base64 Data URI in local mode, public URL in production
+  const imageField = resolveImageForVideoGen(sourceImageUrl);
 
   console.log(
-    `[VideoGen Wavespeed] Submitting MiniMax H3 image-to-video | Prompt: "${prompt.slice(0, 60)}..." | Duration: ${h3Duration}s`
+    `[VideoGen Wavespeed] Submitting MiniMax H3 image-to-video | Prompt: "${prompt.slice(0, 60)}..." | Duration: ${h3Duration}s | Image: ${
+      imageField ? (imageField.startsWith("data:") ? `base64 Data URI (${Math.round(imageField.length / 1024)}KB)` : imageField) : "none"
+    }`
   );
 
   // 1. POST request to Wavespeed MiniMax H3 image-to-video endpoint
@@ -111,7 +155,7 @@ export async function generateShotVideo(
     },
     body: JSON.stringify({
       prompt,
-      image: publicImageUrl || undefined,
+      image: imageField || undefined,
       duration: h3Duration,
     }),
   });
@@ -137,14 +181,17 @@ export async function generateShotVideo(
 
   console.log(`[VideoGen Wavespeed] Prediction created with ID: ${requestId}`);
 
-  // 2. Poll result endpoint with exponential backoff starting at 2s
+  // 2. Poll result endpoint — 300s timeout (MiniMax H3 median ~179s per WaveSpeed docs), 4-5s interval
   const startTime = Date.now();
-  const maxTimeoutMs = 120000; // 120 seconds timeout for video generation
-  let delayMs = 2000;
+  const maxTimeoutMs = 300000; // 300 seconds
+  let delayMs = 4000; // start at 4s
+  let pollCount = 0;
+  let lastStatus = "unknown";
 
   while (Date.now() - startTime < maxTimeoutMs) {
     await new Promise((resolve) => setTimeout(resolve, delayMs));
-    delayMs = Math.min(delayMs + 500, 5000); // Back off interval up to 5s max
+    delayMs = Math.min(delayMs + 500, 5000); // ramp up to 5s max
+    pollCount++;
 
     const pollResponse = await fetch(
       `https://api.wavespeed.ai/api/v3/predictions/${requestId}/result`,
@@ -167,8 +214,9 @@ export async function generateShotVideo(
     const status = String(
       pollData.status || pollData.state || pollData.data?.status || ""
     ).toLowerCase();
+    lastStatus = status;
 
-    console.log(`[VideoGen Wavespeed Polling] Request: ${requestId} | Status: ${status}`);
+    console.log(`[VideoGen Wavespeed Polling] Poll #${pollCount} | Request: ${requestId} | Status: ${status}`);
 
     if (status === "completed" || status === "succeeded" || status === "done") {
       const outputs =
@@ -232,6 +280,9 @@ export async function generateShotVideo(
     }
   }
 
-  // Throw typed VideoGenError on timeout
-  throw new VideoGenError(`Wavespeed video generation timed out after 120s for request ${requestId}`);
+  // Throw typed VideoGenError on timeout with diagnostic context
+  const elapsedSeconds = Math.round((Date.now() - startTime) / 1000);
+  throw new VideoGenError(
+    `Wavespeed video generation timed out after ${elapsedSeconds}s (${pollCount} polls), last status: ${lastStatus}, request ID: ${requestId}`
+  );
 }

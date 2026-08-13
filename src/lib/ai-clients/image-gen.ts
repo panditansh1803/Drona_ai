@@ -61,14 +61,17 @@ export async function generateShotImage(prompt: string): Promise<string> {
 
   console.log(`[ImageGen Wavespeed] Prediction created with ID: ${requestId}`);
 
-  // 2. Poll result endpoint with exponential backoff starting at 2s
+  // 2. Poll result endpoint — 240s timeout, 4-5s interval to reduce request volume
   const startTime = Date.now();
-  const maxTimeoutMs = 60000; // 60 seconds timeout
-  let delayMs = 2000;
+  const maxTimeoutMs = 240000; // 240 seconds timeout
+  let delayMs = 4000; // start at 4s
+  let pollCount = 0;
+  let lastStatus = "unknown";
 
   while (Date.now() - startTime < maxTimeoutMs) {
     await new Promise((resolve) => setTimeout(resolve, delayMs));
-    delayMs = Math.min(delayMs + 500, 5000); // Back off interval up to 5s max
+    delayMs = Math.min(delayMs + 500, 5000); // ramp up to 5s max
+    pollCount++;
 
     const pollResponse = await fetch(
       `https://api.wavespeed.ai/api/v3/predictions/${requestId}/result`,
@@ -91,8 +94,9 @@ export async function generateShotImage(prompt: string): Promise<string> {
     const status = String(
       pollData.status || pollData.state || pollData.data?.status || ""
     ).toLowerCase();
+    lastStatus = status;
 
-    console.log(`[ImageGen Wavespeed Polling] Request: ${requestId} | Status: ${status}`);
+    console.log(`[ImageGen Wavespeed Polling] Poll #${pollCount} | Request: ${requestId} | Status: ${status}`);
 
     if (status === "completed" || status === "succeeded" || status === "done") {
       const outputs =
@@ -149,6 +153,9 @@ export async function generateShotImage(prompt: string): Promise<string> {
     }
   }
 
-  // 4. On timeout, throw typed ImageGenError
-  throw new ImageGenError(`Wavespeed image generation timed out after 60s for request ${requestId}`);
+  // 4. On timeout, throw typed ImageGenError with diagnostic context
+  const elapsedSeconds = Math.round((Date.now() - startTime) / 1000);
+  throw new ImageGenError(
+    `Wavespeed image generation timed out after ${elapsedSeconds}s (${pollCount} polls), last status: ${lastStatus}, request ID: ${requestId}`
+  );
 }
