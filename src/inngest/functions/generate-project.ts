@@ -245,23 +245,42 @@ export const generateProject = inngest.createFunction(
           orderBy: { number: "asc" },
         });
 
-        const renderShots = shots.map((s) => ({
-          id: s.shot_id,
-          number: s.number,
-          videoUrl: s.generated_video_url || "",
-          audioUrl: s.generated_voiceover_url || undefined,
-          durationSeconds: s.voiceover_duration_seconds || s.duration_seconds,
-          captionCues: (s.caption_cues as unknown as { text: string; start: number; end: number }[]) || [],
-        }));
+        console.log(`[Render Step] Starting render for project ${projectId} with ${shots.length} shots`);
+
+        const renderShots = shots.map((s) => {
+          // caption_cues is stored as a JSON string in SQLite; parse it back
+          let parsedCaptions: { text: string; start: number; end: number }[] = [];
+          if (s.caption_cues && typeof s.caption_cues === "string") {
+            try {
+              parsedCaptions = JSON.parse(s.caption_cues);
+            } catch {
+              console.warn(`[Render Step] Failed to parse caption_cues for shot ${s.shot_id}`);
+            }
+          }
+
+          return {
+            id: s.shot_id,
+            number: s.number,
+            videoUrl: s.generated_video_url || "",
+            audioUrl: s.generated_voiceover_url || undefined,
+            durationSeconds: s.voiceover_duration_seconds || s.duration_seconds,
+            captionCues: parsedCaptions,
+          };
+        });
 
         const { renderAndUploadVideo } = await import("@/render/renderer");
         const finalVideoUrl = await renderAndUploadVideo(projectId, renderShots);
 
+        // Persist the final video URL and mark project COMPLETE
         await prisma.project.update({
           where: { project_id: projectId },
-          data: { status: "COMPLETE" },
+          data: {
+            status: "COMPLETE",
+            final_video_url: finalVideoUrl,
+          },
         });
 
+        console.log(`[Render Step] Project ${projectId} COMPLETE. Final video: ${finalVideoUrl}`);
         return { success: true, finalVideoUrl };
       } catch (err) {
         await prisma.project.update({

@@ -67,13 +67,13 @@ export default function StudioPage() {
       : String(project.analysis.suggestions)
     : "No suggestions provided.";
 
-  // Use the last shot that has a generated video — shots are ordered by number asc,
-  // so the last one with a video is the most recently completed clip.
-  // In a full Remotion render flow this would be a top-level project.final_video_url field instead.
+  // Primary: use the Remotion-rendered final video URL written to the Project row after COMPLETE.
+  // Fallback: last shot's video for preview while RENDERING or during dev without a full render.
   const shotsWithVideo = project?.shots?.filter((s) => s.generated_video_url) ?? [];
-  const finalVideoUrl = shotsWithVideo.length > 0
+  const lastShotVideo = shotsWithVideo.length > 0
     ? shotsWithVideo[shotsWithVideo.length - 1].generated_video_url ?? undefined
     : undefined;
+  const finalVideoUrl = project?.final_video_url ?? lastShotVideo;
 
   return (
     <div className="mx-auto w-full max-w-6xl px-6 py-8 flex flex-col gap-6">

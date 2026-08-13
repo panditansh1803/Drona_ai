@@ -47,7 +47,19 @@ export async function POST(
     if (assetType === "video") {
       const prompt = shot.video_prompt || shot.text;
       const targetDuration = shot.voiceover_duration_seconds || shot.duration_seconds;
-      const rawVideoUrl = await generateShotVideo(prompt, shot.duration_seconds);
+
+      // Ensure a source image exists before generating video
+      let imageUrl = shot.generated_image_url;
+      if (!imageUrl) {
+        console.log(`[Regenerate Shot] No existing image for shot ${shotId}. Generating image first...`);
+        imageUrl = await generateShotImage(shot.image_prompt || shot.text);
+        await prisma.shot.update({
+          where: { shot_id: shotId },
+          data: { generated_image_url: imageUrl },
+        });
+      }
+
+      const rawVideoUrl = await generateShotVideo(prompt, shot.duration_seconds, imageUrl);
       const alignedVideoUrl = await matchVideoDuration(
         rawVideoUrl,
         targetDuration,

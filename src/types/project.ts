@@ -75,6 +75,7 @@ export interface ProjectModel {
   topic_name: string;
   analysis?: ProjectAnalysis | null;
   shots?: ShotModel[];
+  final_video_url?: string | null;
   created_at?: Date;
   updated_at?: Date;
 }

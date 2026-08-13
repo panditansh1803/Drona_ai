@@ -4,6 +4,7 @@ import {
   interpolate,
   OffthreadVideo,
   Audio,
+  staticFile,
 } from "remotion";
 import type { RenderShot } from "./types";
 
@@ -11,6 +12,11 @@ interface ShotSequenceProps {
   shot: RenderShot;
   fps: number;
 }
+
+const resolveMediaSrc = (url: string) =>
+  url.startsWith("http://") || url.startsWith("https://")
+    ? url
+    : staticFile(url.startsWith("/") ? url : `/${url}`);
 
 export const ShotSequence: React.FC<ShotSequenceProps> = ({ shot, fps }) => {
   const frame = useCurrentFrame();
@@ -45,7 +51,7 @@ export const ShotSequence: React.FC<ShotSequenceProps> = ({ shot, fps }) => {
       {/* ─── Video Layer ─── */}
       {shot.videoUrl && (
         <OffthreadVideo
-          src={shot.videoUrl}
+          src={resolveMediaSrc(shot.videoUrl)}
           style={{
             width: "100%",
             height: "100%",
@@ -55,7 +61,7 @@ export const ShotSequence: React.FC<ShotSequenceProps> = ({ shot, fps }) => {
       )}
 
       {/* ─── Voiceover Audio Layer ─── */}
-      {shot.audioUrl && <Audio src={shot.audioUrl} />}
+      {shot.audioUrl && <Audio src={resolveMediaSrc(shot.audioUrl)} />}
 
       {/* ─── Burned-In Captions Layer ─── */}
       {activeCue && (

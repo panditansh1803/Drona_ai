@@ -137,13 +137,31 @@ export async function generateShotVideo(
   // Clamp duration to MiniMax H3's valid range of 5-15 seconds
   const h3Duration = Math.max(5, Math.min(15, Math.round(durationSeconds)));
 
+  // Guard: throw clear error if sourceImageUrl is missing or empty
+  if (!sourceImageUrl || sourceImageUrl.trim() === "") {
+    throw new VideoGenError(
+      "No source image available for video generation (sourceImageUrl parameter is missing or empty)"
+    );
+  }
+
   // Resolve the image: base64 Data URI in local mode, public URL in production
   const imageField = resolveImageForVideoGen(sourceImageUrl);
 
+  if (!imageField) {
+    throw new VideoGenError(
+      `Failed to resolve source image '${sourceImageUrl}' into base64 or URL for video generation`
+    );
+  }
+
+  // Log exact image field length immediately before fetch call
   console.log(
-    `[VideoGen Wavespeed] Submitting MiniMax H3 image-to-video | Prompt: "${prompt.slice(0, 60)}..." | Duration: ${h3Duration}s | Image: ${
-      imageField ? (imageField.startsWith("data:") ? `base64 Data URI (${Math.round(imageField.length / 1024)}KB)` : imageField) : "none"
+    `[VideoGen Wavespeed Payload] Request payload image field length: ${
+      imageField ? imageField.length : "EMPTY"
     }`
+  );
+
+  console.log(
+    `[VideoGen Wavespeed] Submitting MiniMax H3 image-to-video | Prompt: "${prompt.slice(0, 60)}..." | Duration: ${h3Duration}s | Image Length: ${imageField.length} chars`
   );
 
   // 1. POST request to Wavespeed MiniMax H3 image-to-video endpoint
