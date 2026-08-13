@@ -4,7 +4,7 @@ import { useState } from "react";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
-import { Loader2, SparklesIcon, AlertCircleIcon } from "lucide-react";
+import { Loader2, SparklesIcon } from "lucide-react";
 
 interface TopicInputScreenProps {
   onSubmit: (topic: string, description: string) => Promise<void>;
@@ -16,9 +16,7 @@ export default function TopicInputScreen({ onSubmit }: TopicInputScreenProps) {
   const [errors, setErrors] = useState<{ topic?: string; description?: string; submit?: string }>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  async function handleSubmit(e?: React.FormEvent) {
-    if (e) e.preventDefault();
-
+  async function handleSubmit() {
     const next: typeof errors = {};
 
     if (!topic.trim()) {
@@ -38,7 +36,7 @@ export default function TopicInputScreen({ onSubmit }: TopicInputScreenProps) {
     try {
       await onSubmit(topic.trim(), description.trim());
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "Failed to analyze topic with AI engine";
+      const msg = err instanceof Error ? err.message : "Failed to analyze topic with Gemini AI";
       setErrors({ submit: msg });
     } finally {
       setIsSubmitting(false);
@@ -46,7 +44,13 @@ export default function TopicInputScreen({ onSubmit }: TopicInputScreenProps) {
   }
 
   return (
-    <form onSubmit={handleSubmit} className="mx-auto flex w-full max-w-xl flex-col gap-6">
+    <form
+      onSubmit={(e) => {
+        e.preventDefault();
+        handleSubmit();
+      }}
+      className="mx-auto flex w-full max-w-xl flex-col gap-6"
+    >
       {/* ─── Heading ─── */}
       <div className="flex flex-col gap-1">
         <h2 className="text-base font-semibold text-[#F3F4F6]">Topic and Context</h2>
@@ -55,14 +59,10 @@ export default function TopicInputScreen({ onSubmit }: TopicInputScreenProps) {
         </p>
       </div>
 
-      {/* ─── Error Alert Banner ─── */}
+      {/* ─── Error Alert ─── */}
       {errors.submit && (
-        <div className="flex items-start gap-2.5 rounded-lg border border-red-500/30 bg-red-500/10 p-3.5 text-xs text-red-400">
-          <AlertCircleIcon className="size-4 shrink-0 mt-0.5" />
-          <div className="flex flex-col gap-1">
-            <strong className="font-semibold">Analysis Failed</strong>
-            <span>{errors.submit}</span>
-          </div>
+        <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-3.5 text-xs text-red-400">
+          <strong className="font-semibold">Analysis Error:</strong> {errors.submit}
         </div>
       )}
 
@@ -80,7 +80,6 @@ export default function TopicInputScreen({ onSubmit }: TopicInputScreenProps) {
           onChange={(e) => {
             setTopic(e.target.value);
             if (errors.topic) setErrors((prev) => ({ ...prev, topic: undefined }));
-            if (errors.submit) setErrors((prev) => ({ ...prev, submit: undefined }));
           }}
           aria-invalid={!!errors.topic}
         />
@@ -104,7 +103,6 @@ export default function TopicInputScreen({ onSubmit }: TopicInputScreenProps) {
           onChange={(e) => {
             setDescription(e.target.value);
             if (errors.description) setErrors((prev) => ({ ...prev, description: undefined }));
-            if (errors.submit) setErrors((prev) => ({ ...prev, submit: undefined }));
           }}
           aria-invalid={!!errors.description}
         />
@@ -123,7 +121,7 @@ export default function TopicInputScreen({ onSubmit }: TopicInputScreenProps) {
           {isSubmitting ? (
             <>
               <Loader2 className="h-4 w-4 animate-spin text-white" />
-              Analyzing topic with AI...
+              Analyzing topic with Gemini AI...
             </>
           ) : (
             <>
