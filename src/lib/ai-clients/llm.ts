@@ -24,7 +24,7 @@ You will receive a TOPIC and a DESCRIPTION (how the educator wants it explained)
 
 2. ESTABLISH A STYLE BIBLE: Before any visuals are generated, decide the single consistent visual language every shot in this video will share. This is the most important thing you produce — every image and video prompt downstream will be built on top of it, so be concrete and specific, not vague ("colorful and engaging" is useless; "flat 2D vector illustration, warm amber and teal palette, soft rounded shapes, no outlines, consistent character design for any recurring figures" is usable).
 
-Submit your structured response using the submit_verification tool.`;
+Submit your structured response using the submit_verification tool with accurate, report, suggestions, and the style_bible object (containing visual_style, color_palette, tone, recurring_motifs).`;
 
 export const BREAKDOWN_SCRIPT_SYSTEM_PROMPT = `You are the scriptwriting and shot-direction engine for Drona AI.
 
@@ -36,12 +36,13 @@ THINK IN NARRATIVE ARC, not equal-sized information chunks:
 - The final shot is a payoff — a synthesis or a "why this matters" close, not just "and that's the last step"
 
 CONSTRAINTS:
-- Each shot is 15-30 seconds of narration (roughly 40-75 spoken words at natural pace)
-- Produce between 4 and 8 shots depending on topic complexity — don't pad a simple topic to hit a shot count, and don't cram a complex topic into too few
+- Total video duration across all shots must not exceed 40 seconds. This is a hard ceiling, not a target to fill.
+- Decide the number of shots and each shot's duration based on what the topic genuinely needs within that 40-second budget — do not default to a fixed number of shots. A simple topic might need only 2-3 shots; a more nuanced one might need 5-6 shorter shots. Prioritize clarity within the tight budget over completeness — cut detail rather than exceed the limit.
+- Each individual shot should be no more than ~8 seconds of narration (roughly 18-20 spoken words), since shots will be paired with short 5-second generated video clips extended by a still-frame hold for any remaining audio — keep narration concise per shot rather than long paragraphs.
 
 FOR EACH SHOT, write three parallel outputs that must agree with each other (the narration, the image, and the video should all be describing the same moment, not three different ideas):
 
-- narration: the exact voiceover script text for this shot
+- narration: the exact voiceover script text for this shot (keep concise, max ~18-20 spoken words)
 - image_prompt: a rich, specific visual description of this shot's key frame, written for an image generation model. ALWAYS incorporate the style_bible's visual_style, color_palette, and any recurring_motifs verbatim or near-verbatim so every shot's image prompt inherits the same visual language. Describe composition, subject, and mood concretely.
 - video_prompt: a short motion/camera direction describing how this still frame should animate — e.g. "slow push in", "gentle parallax as the chloroplast rotates", "camera holds, particles drift upward". This will be used for image-to-video generation, so describe MOTION ONLY, not the scene itself (the scene is already fully specified in image_prompt) — assume the video model will see the generated image and only needs direction on how it should move.
 
@@ -58,20 +59,22 @@ Submit your structured response using the submit_shot_prompts tool.`;
 // ─── Zod Schemas for Validation ──────────────────────────────────────────────
 
 const RawStyleBibleSchema = z.object({
-  visual_style: z.string(),
-  color_palette: z.union([z.string(), z.array(z.string())]).transform((val) =>
-    Array.isArray(val) ? val.join(", ") : val
-  ),
-  tone: z.string(),
-  recurring_motifs: z.string(),
+  visual_style: z.string().default("Clean 2D vector illustration, crisp edges"),
+  color_palette: z
+    .union([z.string(), z.array(z.string())])
+    .transform((val) => (Array.isArray(val) ? val.join(", ") : val))
+    .default("Warm amber, deep slate blue, crisp white"),
+  tone: z.string().default("Clear, engaging, pedagogical"),
+  recurring_motifs: z.string().default("minimalist geometric frames"),
 });
 
 const StyleBibleZodSchema = z.preprocess((val) => {
+  if (!val) return {};
   if (typeof val === "string") {
     try {
       return JSON.parse(val);
     } catch {
-      return val;
+      return { visual_style: val, color_palette: "", tone: "", recurring_motifs: "" };
     }
   }
   return val;
@@ -81,20 +84,40 @@ const VerifyTopicZodSchema = z.object({
   accurate: z.boolean(),
   report: z.string(),
   suggestions: z.array(z.string()),
-  style_bible: StyleBibleZodSchema,
+  style_bible: StyleBibleZodSchema.default({
+    visual_style: "Clean 2D vector illustration, crisp edges",
+    color_palette: "Warm amber, deep slate blue, crisp white",
+    tone: "Clear, engaging, pedagogical",
+    recurring_motifs: "minimalist geometric frames",
+  }),
 });
 
 const ScriptShotZodSchema = z.object({
   number: z.number(),
-  duration_seconds: z.number(),
+  duration_seconds: z.number().positive(),
   narration: z.string(),
   image_prompt: z.string(),
   video_prompt: z.string(),
 });
 
-const BreakdownScriptZodSchema = z.object({
-  shots: z.array(ScriptShotZodSchema),
-});
+export const BreakdownScriptZodSchema = z
+  .object({
+    shots: z.array(ScriptShotZodSchema).min(1),
+  })
+  .refine(
+    (data) => {
+      const totalDuration = data.shots.reduce(
+        (sum, s) => sum + s.duration_seconds,
+        0
+      );
+      return totalDuration <= 40;
+    },
+    {
+      message:
+        "Total video duration across all shots exceeds the 40-second hard ceiling",
+      path: ["shots"],
+    }
+  );
 
 const RegenerateShotPromptsZodSchema = z.object({
   image_prompt: z.string(),
@@ -269,8 +292,14 @@ export async function breakdownScript(
                     type: "object",
                     properties: {
                       number: { type: "integer" },
-                      duration_seconds: { type: "integer" },
-                      narration: { type: "string" },
+                      duration_seconds: {
+                        type: "integer",
+                        description: "Duration in seconds (max ~8s per shot; total sum across all shots must be <= 40s)",
+                      },
+                      narration: {
+                        type: "string",
+                        description: "Concise voiceover script for this shot (max ~18-20 words)",
+                      },
                       image_prompt: { type: "string" },
                       video_prompt: { type: "string" },
                     },
@@ -319,7 +348,7 @@ export async function breakdownScript(
     id: `shot-${s.number || index + 1}`,
     number: s.number || index + 1,
     text: s.narration,
-    durationSeconds: Math.max(15, Math.min(30, s.duration_seconds)),
+    durationSeconds: Math.max(1, s.duration_seconds),
     imagePrompt: s.image_prompt,
     videoPrompt: s.video_prompt,
     voiceoverPrompt: s.narration,

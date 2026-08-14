@@ -66,9 +66,11 @@ export async function regenerateShotAsset(
 }
 
 export async function requestRender(projectId: string): Promise<{ success: boolean }> {
+  console.log(`[requestRender] Calling POST /api/projects/${projectId}/render`);
   const res = await fetch(`/api/projects/${projectId}/render`, {
     method: "POST",
   });
+  console.log(`[requestRender] Response status: ${res.status} ${res.statusText}`);
   return handleResponse(res, "Failed to request render");
 }
 

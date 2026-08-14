@@ -1,23 +1,34 @@
 "use client";
 
 import { Button } from "@/components/ui/button";
-import { DownloadIcon, RefreshCwIcon, FilmIcon, LoaderCircleIcon } from "lucide-react";
+import {
+  DownloadIcon,
+  RefreshCwIcon,
+  FilmIcon,
+  LoaderCircleIcon,
+  AlertTriangleIcon,
+} from "lucide-react";
 
 interface PreviewScreenProps {
   videoUrl?: string;
   projectStatus?: string;
+  errorMessage?: string;
   onDownload: () => void;
   onRevise: () => void;
+  onRetryRender?: () => void;
 }
 
 export default function PreviewScreen({
   videoUrl,
   projectStatus,
+  errorMessage,
   onDownload,
   onRevise,
+  onRetryRender,
 }: PreviewScreenProps) {
   const isRendering = projectStatus === "RENDERING";
   const isFailed = projectStatus === "FAILED";
+  const isComplete = projectStatus === "COMPLETE" && !!videoUrl;
 
   return (
     <div className="mx-auto flex w-full max-w-xl flex-col gap-6">
@@ -31,18 +42,25 @@ export default function PreviewScreen({
 
       {/* ─── Video Display Frame ─── */}
       <div className="relative flex aspect-video w-full items-center justify-center overflow-hidden rounded-xl border border-[#263241] bg-[#0B0F14] shadow-2xl shadow-black/80">
-        {videoUrl && !isRendering ? (
-          <video
-            src={videoUrl}
-            controls
-            autoPlay
-            className="h-full w-full object-contain"
-          />
+        {isFailed ? (
+          /* ─── Failed state (Takes precedence over any stale/fallback video) ─── */
+          <div className="flex flex-col items-center justify-center gap-4 text-[#737D8C] p-6 text-center max-w-md">
+            <div className="flex size-14 items-center justify-center rounded-2xl bg-red-500/10 border border-red-500/30 shadow-inner">
+              <AlertTriangleIcon className="size-7 text-red-400" />
+            </div>
+            <div className="flex flex-col gap-2">
+              <span className="text-sm font-semibold text-red-400">
+                Final Video Render Failed
+              </span>
+              <p className="text-xs text-[#A7B0BE] bg-[#161D27] border border-red-500/20 rounded-lg p-3 text-left font-mono break-words">
+                {errorMessage || "Remotion video stitching failed. Check server console for full traceback."}
+              </p>
+            </div>
+          </div>
         ) : isRendering ? (
           /* ─── Rendering in-progress state ─── */
           <div className="flex flex-col items-center justify-center gap-4 text-[#737D8C] p-6 text-center">
             <div className="relative flex size-16 items-center justify-center">
-              {/* Pulsing outer ring */}
               <div className="absolute inset-0 rounded-full border-2 border-indigo-500/30 animate-ping" />
               <div className="flex size-14 items-center justify-center rounded-2xl bg-[#161D27] border border-indigo-500/30 shadow-inner">
                 <LoaderCircleIcon className="size-7 text-indigo-400 animate-spin" />
@@ -53,26 +71,21 @@ export default function PreviewScreen({
                 Rendering Final Composition…
               </span>
               <span className="text-xs text-[#737D8C]">
-                Stitching shots, voiceovers, and captions into one MP4.
+                Compiling Remotion bundle and stitching shots, audio & captions.
               </span>
               <span className="text-xs text-indigo-400 font-mono mt-1">
                 Watch the server console for per-shot progress logs.
               </span>
             </div>
           </div>
-        ) : isFailed ? (
-          /* ─── Failed state ─── */
-          <div className="flex flex-col items-center justify-center gap-3 text-[#737D8C] p-6 text-center">
-            <div className="flex size-14 items-center justify-center rounded-2xl bg-red-500/10 border border-red-500/30 shadow-inner">
-              <FilmIcon className="size-7 text-red-400" />
-            </div>
-            <div className="flex flex-col gap-1">
-              <span className="text-sm font-medium text-red-400">Render Failed</span>
-              <span className="text-xs text-[#737D8C]">
-                Check the server console for error details. You can revise and retry.
-              </span>
-            </div>
-          </div>
+        ) : isComplete ? (
+          /* ─── Completed Video Player ─── */
+          <video
+            src={videoUrl}
+            controls
+            autoPlay
+            className="h-full w-full object-contain"
+          />
         ) : (
           /* ─── Idle / waiting state ─── */
           <div className="flex flex-col items-center justify-center gap-3 text-[#737D8C] p-6 text-center">
@@ -84,7 +97,7 @@ export default function PreviewScreen({
                 Final Video Composition Render
               </span>
               <span className="text-xs text-[#737D8C]">
-                Click below to request Remotion composition render
+                Ready to stitch all shots into the final MP4 lesson.
               </span>
             </div>
           </div>
@@ -93,22 +106,64 @@ export default function PreviewScreen({
 
       {/* ─── Actions ─── */}
       <div className="flex flex-wrap items-center gap-3 pt-2">
-        <Button
-          onClick={onDownload}
-          disabled={!videoUrl || isRendering}
-          className="bg-indigo-600 hover:bg-indigo-500 text-white font-medium shadow-md shadow-indigo-600/20 gap-2 px-5 py-2 disabled:opacity-50"
-        >
-          <DownloadIcon className="size-4" />
-          Download Rendered Video
-        </Button>
-        <Button
-          variant="outline"
-          onClick={onRevise}
-          className="bg-[#161D27] border-[#263241] text-[#A7B0BE] hover:bg-[#1B2430] hover:text-[#F3F4F6] gap-2"
-        >
-          <RefreshCwIcon className="size-4" />
-          Revise Asset Studio
-        </Button>
+        {isFailed ? (
+          <>
+            {onRetryRender && (
+              <Button
+                onClick={onRetryRender}
+                className="bg-indigo-600 hover:bg-indigo-500 text-white font-medium shadow-md shadow-indigo-600/20 gap-2 px-5 py-2"
+              >
+                <RefreshCwIcon className="size-4" />
+                Retry Video Render
+              </Button>
+            )}
+            <Button
+              variant="outline"
+              onClick={onRevise}
+              className="bg-[#161D27] border-[#263241] text-[#A7B0BE] hover:bg-[#1B2430] hover:text-[#F3F4F6] gap-2"
+            >
+              Revise Asset Studio
+            </Button>
+          </>
+        ) : isComplete ? (
+          <>
+            <Button
+              onClick={onDownload}
+              className="bg-indigo-600 hover:bg-indigo-500 text-white font-medium shadow-md shadow-indigo-600/20 gap-2 px-5 py-2"
+            >
+              <DownloadIcon className="size-4" />
+              Download Rendered Video
+            </Button>
+            <Button
+              variant="outline"
+              onClick={onRevise}
+              className="bg-[#161D27] border-[#263241] text-[#A7B0BE] hover:bg-[#1B2430] hover:text-[#F3F4F6] gap-2"
+            >
+              <RefreshCwIcon className="size-4" />
+              Revise Asset Studio
+            </Button>
+          </>
+        ) : (
+          <>
+            {onRetryRender && (
+              <Button
+                onClick={onRetryRender}
+                disabled={isRendering}
+                className="bg-indigo-600 hover:bg-indigo-500 text-white font-medium shadow-md shadow-indigo-600/20 gap-2 px-5 py-2 disabled:opacity-50"
+              >
+                <FilmIcon className="size-4" />
+                {isRendering ? "Rendering..." : "Start Video Render"}
+              </Button>
+            )}
+            <Button
+              variant="outline"
+              onClick={onRevise}
+              className="bg-[#161D27] border-[#263241] text-[#A7B0BE] hover:bg-[#1B2430] hover:text-[#F3F4F6] gap-2"
+            >
+              Revise Asset Studio
+            </Button>
+          </>
+        )}
       </div>
     </div>
   );

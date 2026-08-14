@@ -27,8 +27,26 @@ const TABS = [
 ] as const;
 
 export default function StudioPage() {
-  const [activeTab, setActiveTab] = useState<number>(0);
-  const [projectId, setProjectId] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<number>(() => {
+    if (typeof window !== "undefined") {
+      const tab = new URLSearchParams(window.location.search).get("tab");
+      if (tab !== null) {
+        const tabNum = parseInt(tab, 10);
+        if (!isNaN(tabNum) && tabNum >= 0 && tabNum <= 4) {
+          return tabNum;
+        }
+      }
+    }
+    return 0;
+  });
+
+  const [projectId, setProjectId] = useState<string | null>(() => {
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search);
+      return params.get("projectId") || params.get("id");
+    }
+    return null;
+  });
 
   // Poll real backend project state every 2s
   const { project } = useProjectStatus(projectId);
@@ -67,13 +85,9 @@ export default function StudioPage() {
       : String(project.analysis.suggestions)
     : "No suggestions provided.";
 
-  // Primary: use the Remotion-rendered final video URL written to the Project row after COMPLETE.
-  // Fallback: last shot's video for preview while RENDERING or during dev without a full render.
-  const shotsWithVideo = project?.shots?.filter((s) => s.generated_video_url) ?? [];
-  const lastShotVideo = shotsWithVideo.length > 0
-    ? shotsWithVideo[shotsWithVideo.length - 1].generated_video_url ?? undefined
-    : undefined;
-  const finalVideoUrl = project?.final_video_url ?? lastShotVideo;
+  // Rendered final video URL written to the Project row after Remotion COMPLETE (no single-shot fallback)
+  const finalVideoUrl = project?.final_video_url || undefined;
+  const renderError = (project?.analysis as { render_error?: string } | undefined)?.render_error;
 
   return (
     <div className="mx-auto w-full max-w-6xl px-6 py-8 flex flex-col gap-6">
@@ -101,7 +115,15 @@ export default function StudioPage() {
             </span>
             <div className="h-3 w-px bg-[#263241]" />
             <span className="inline-flex items-center gap-1.5 shrink-0">
-              <span className="size-2 rounded-full bg-emerald-400 animate-pulse" />
+              <span
+                className={`size-2 rounded-full ${
+                  project.status === "FAILED"
+                    ? "bg-red-400"
+                    : project.status === "COMPLETE"
+                    ? "bg-emerald-400"
+                    : "bg-emerald-400 animate-pulse"
+                }`}
+              />
               Status: <span className="font-semibold text-[#F3F4F6]">{project.status}</span>
             </span>
           </div>
@@ -197,12 +219,17 @@ export default function StudioPage() {
               }
             }}
             onComplete={async () => {
+              console.log("[StudioPage] onComplete triggered | projectId:", projectId);
               if (projectId) {
                 try {
+                  console.log(`[StudioPage] Triggering requestRender for project ${projectId}...`);
                   await requestRender(projectId);
+                  console.log(`[StudioPage] requestRender succeeded for project ${projectId}`);
                 } catch (err) {
-                  console.error("Request render error:", err);
+                  console.error("[StudioPage] Request render error:", err);
                 }
+              } else {
+                console.warn("[StudioPage] onComplete called with null projectId!");
               }
               setActiveTab(4);
             }}
@@ -212,13 +239,30 @@ export default function StudioPage() {
         {effectiveTab === 4 && (
           <PreviewScreen
             videoUrl={finalVideoUrl}
+            projectStatus={project?.status}
+            errorMessage={renderError}
             onDownload={() => {
               if (finalVideoUrl) {
-                window.open(finalVideoUrl, "_blank");
+                const link = document.createElement("a");
+                link.href = finalVideoUrl;
+                link.download = `drona-video-${projectId || "lesson"}.mp4`;
+                link.target = "_blank";
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
               }
             }}
             onRevise={() => {
               setActiveTab(3);
+            }}
+            onRetryRender={async () => {
+              if (projectId) {
+                try {
+                  await requestRender(projectId);
+                } catch (err) {
+                  console.error("Retry render error:", err);
+                }
+              }
             }}
           />
         )}

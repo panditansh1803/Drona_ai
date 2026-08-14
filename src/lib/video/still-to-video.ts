@@ -11,78 +11,17 @@
  * quotes inside the filter graph.
  */
 
-import { execFile, execFileSync } from "child_process";
+import { execFile } from "child_process";
 import { promisify } from "util";
 import path from "path";
-import os from "os";
 import fs from "fs";
+import { getFfmpegPath } from "@/src/lib/video/ffmpeg-check";
 
 const execFileAsync = promisify(execFile);
 
 // ─── FFmpeg Binary Resolution ─────────────────────────────────────────────────
 
-/**
- * Resolves the FFmpeg executable path. Tries:
- * 1. PATH lookup via where.exe (works after shell restart)
- * 2. Known winget install location (works before shell restart)
- * 3. Falls back to bare "ffmpeg" string (throws if not found)
- */
-function findFfmpegBinary(): string {
-  // 1. Check PATH
-  try {
-    const whereExe = process.platform === "win32" ? "where.exe" : "which";
-    const result = execFileSync(whereExe, ["ffmpeg"], {
-      encoding: "utf8",
-      timeout: 3000,
-    })
-      .trim()
-      .split(/\r?\n/)[0]
-      .trim();
-    if (result && fs.existsSync(result)) return result;
-  } catch {
-    /* not on PATH yet */
-  }
-
-  // 2. Winget install location (Windows)
-  if (process.platform === "win32") {
-    const wingetBase = path.join(
-      os.homedir(),
-      "AppData",
-      "Local",
-      "Microsoft",
-      "WinGet",
-      "Packages"
-    );
-    if (fs.existsSync(wingetBase)) {
-      try {
-        const pkgDirs = fs.readdirSync(wingetBase);
-        const ffmpegPkg = pkgDirs.find((d) => d.startsWith("Gyan.FFmpeg"));
-        if (ffmpegPkg) {
-          const subDirs = fs.readdirSync(path.join(wingetBase, ffmpegPkg));
-          const buildDir = subDirs.find((d) => d.startsWith("ffmpeg-"));
-          if (buildDir) {
-            const candidate = path.join(
-              wingetBase,
-              ffmpegPkg,
-              buildDir,
-              "bin",
-              "ffmpeg.exe"
-            );
-            if (fs.existsSync(candidate)) return candidate;
-          }
-        }
-      } catch {
-        /* ignore */
-      }
-    }
-  }
-
-  // 3. Final fallback
-  return "ffmpeg";
-}
-
-// Resolve once at module load time
-const FFMPEG = findFfmpegBinary();
+const FFMPEG = getFfmpegPath();
 console.log(`[StillToVideo] FFmpeg resolved to: ${FFMPEG}`);
 
 // ─── Core Renderer ────────────────────────────────────────────────────────────

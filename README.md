@@ -33,6 +33,6 @@ You can check out [the Next.js GitHub repository](https://github.com/vercel/next
 
 The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
 
-> **Important Deployment Note**: Every environment variable configured in `.env.local` (such as `ANTHROPIC_API_KEY`, `WAVESPEED_API_KEY`, `GEMINI_API_KEY`, `ELEVENLABS_API_KEY`, etc.) must be added separately in Vercel's Environment Variables project settings before deploying, as local disk `.env.local` files are not deployed to production.
+> **Important Deployment Note**: Every environment variable configured in `.env.local` (such as `ANTHROPIC_API_KEY`, `WAVESPEED_API_KEY`, `GEMINI_API_KEY`, etc.) must be added separately in Vercel's Environment Variables project settings before deploying, as local disk `.env.local` files are not deployed to production.
 
 Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.

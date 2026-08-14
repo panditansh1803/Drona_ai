@@ -128,13 +128,14 @@ function AssetCard({ shotId, type, status, assetUrl, onRun }: AssetCardProps) {
 interface AssetStudioScreenProps {
   shots: Shot[];
   onRunAsset?: (shotId: string, type: AssetType) => Promise<void>;
-  onComplete: () => void;
+  onComplete: () => Promise<void> | void;
 }
 
 const ASSET_TYPES: AssetType[] = ["image", "video", "voiceover"];
 
 export default function AssetStudioScreen({ shots, onRunAsset, onComplete }: AssetStudioScreenProps) {
   const [statuses, setStatuses] = useState<Partial<Record<AssetKey, AssetStatus>>>({});
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const getStatus = (shot: Shot, type: AssetType): AssetStatus => {
     const key = makeKey(shot.id, type);
@@ -188,7 +189,7 @@ export default function AssetStudioScreen({ shots, onRunAsset, onComplete }: Ass
     [shots, handleRun]
   );
 
-  /** True if all shots have assets or status done */
+  // Log shot asset statuses upon render/mount
   const allDone =
     shots.length > 0 &&
     shots.every((shot) =>
@@ -196,6 +197,19 @@ export default function AssetStudioScreen({ shots, onRunAsset, onComplete }: Ass
         (type) => getStatus(shot, type) === "done"
       )
     );
+
+  console.log(
+    `[AssetStudioScreen] Render | Shots: ${shots.length} | allDone: ${allDone} | Asset Statuses:`,
+    shots.map((s) => ({
+      shot: s.number,
+      image: getStatus(s, "image"),
+      imageUrl: s.generatedImageUrl ? "✓" : "null",
+      video: getStatus(s, "video"),
+      videoUrl: s.generatedVideoUrl ? "✓" : "null",
+      voiceover: getStatus(s, "voiceover"),
+      voiceoverUrl: s.generatedVoiceoverUrl ? "✓" : "null",
+    }))
+  );
 
   return (
     <div className="mx-auto flex w-full max-w-3xl flex-col gap-6">
@@ -284,13 +298,31 @@ export default function AssetStudioScreen({ shots, onRunAsset, onComplete }: Ass
       {/* ─── Make final video ─── */}
       <div className="border-t border-[#263241] pt-4">
         <Button
-          disabled={!allDone}
-          onClick={onComplete}
-          className="w-full sm:w-auto bg-indigo-600 hover:bg-indigo-500 text-white font-medium shadow-md shadow-indigo-600/20 gap-2 px-5 py-2"
+          id="make-final-video-btn"
+          disabled={!allDone || isSubmitting}
+          onClick={async () => {
+            console.log("[AssetStudioScreen] 'Make final video' clicked! allDone =", allDone);
+            setIsSubmitting(true);
+            try {
+              await onComplete();
+            } finally {
+              setIsSubmitting(false);
+            }
+          }}
+          className="w-full sm:w-auto bg-indigo-600 hover:bg-indigo-500 text-white font-medium shadow-md shadow-indigo-600/20 gap-2 px-5 py-2 disabled:opacity-50"
         >
-          <SparklesIcon className="size-4" />
-          Proceed to Final Video Preview
-          <ArrowRightIcon className="size-4" />
+          {isSubmitting ? (
+            <>
+              <LoaderCircleIcon className="size-4 animate-spin text-white" />
+              Starting Video Render...
+            </>
+          ) : (
+            <>
+              <SparklesIcon className="size-4" />
+              Make final video
+              <ArrowRightIcon className="size-4" />
+            </>
+          )}
         </Button>
       </div>
     </div>

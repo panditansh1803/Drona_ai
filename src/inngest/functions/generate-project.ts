@@ -271,21 +271,59 @@ export const generateProject = inngest.createFunction(
         const { renderAndUploadVideo } = await import("@/render/renderer");
         const finalVideoUrl = await renderAndUploadVideo(projectId, renderShots);
 
+        const freshProject = await prisma.project.findUnique({
+          where: { project_id: projectId },
+        });
+        let freshAnalysis: Record<string, unknown> = {};
+        if (freshProject?.analysis) {
+          try {
+            freshAnalysis =
+              typeof freshProject.analysis === "string"
+                ? JSON.parse(freshProject.analysis)
+                : freshProject.analysis;
+          } catch {
+            /* ignore */
+          }
+        }
+        delete freshAnalysis.render_error;
+
         // Persist the final video URL and mark project COMPLETE
         await prisma.project.update({
           where: { project_id: projectId },
           data: {
             status: "COMPLETE",
             final_video_url: finalVideoUrl,
+            analysis: JSON.stringify(freshAnalysis),
           },
         });
 
         console.log(`[Render Step] Project ${projectId} COMPLETE. Final video: ${finalVideoUrl}`);
         return { success: true, finalVideoUrl };
       } catch (err) {
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        const freshProject = await prisma.project.findUnique({
+          where: { project_id: projectId },
+        });
+        let freshAnalysis: Record<string, unknown> = {};
+        if (freshProject?.analysis) {
+          try {
+            freshAnalysis =
+              typeof freshProject.analysis === "string"
+                ? JSON.parse(freshProject.analysis)
+                : freshProject.analysis;
+          } catch {
+            /* ignore */
+          }
+        }
+        freshAnalysis.render_error = errorMsg;
+
         await prisma.project.update({
           where: { project_id: projectId },
-          data: { status: "FAILED" },
+          data: {
+            status: "FAILED",
+            final_video_url: null,
+            analysis: JSON.stringify(freshAnalysis),
+          },
         });
 
         throw err;

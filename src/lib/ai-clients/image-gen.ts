@@ -1,7 +1,12 @@
 import fs from "fs";
 import path from "path";
+import { exec } from "child_process";
+import { promisify } from "util";
 import { saveGeneratedFile } from "@/src/lib/storage/local";
 import { getEnvVar } from "@/src/lib/env";
+import { getFfmpegPath } from "@/src/lib/video/ffmpeg-check";
+
+const execAsync = promisify(exec);
 
 export class ImageGenError extends Error {
   constructor(message: string, public override cause?: unknown) {
@@ -18,14 +23,56 @@ function getWavespeedApiKey(): string {
   return apiKey;
 }
 
+/**
+ * Normalizes any generated or fallback image to a clean 16:9 (1920x1080) aspect ratio
+ * using FFmpeg padding/scaling without distortion.
+ */
+async function normalizeImageTo16x9(
+  inputBuffer: Buffer,
+  fileName: string
+): Promise<Buffer> {
+  try {
+    const ffmpegExe = getFfmpegPath();
+    const tempDir = path.join(process.cwd(), "public", "generated", "temp");
+    if (!fs.existsSync(tempDir)) {
+      fs.mkdirSync(tempDir, { recursive: true });
+    }
+    const tempInput = path.join(tempDir, `raw_${fileName}`);
+    const tempOutput = path.join(tempDir, `norm_${fileName}`);
+
+    fs.writeFileSync(tempInput, inputBuffer);
+
+    await execAsync(
+      `"${ffmpegExe}" -y -i "${tempInput}" -vf "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2" "${tempOutput}"`
+    );
+
+    if (fs.existsSync(tempOutput) && fs.statSync(tempOutput).size > 0) {
+      const normalizedBuffer = fs.readFileSync(tempOutput);
+      [tempInput, tempOutput].forEach((p) => {
+        if (fs.existsSync(p)) {
+          try {
+            fs.unlinkSync(p);
+          } catch {
+            /* ignore */
+          }
+        }
+      });
+      return normalizedBuffer;
+    }
+  } catch (err) {
+    console.warn("[ImageGen] 16:9 normalization warning (using raw buffer):", err);
+  }
+  return inputBuffer;
+}
+
 export async function generateShotImage(prompt: string): Promise<string> {
   const apiKey = getWavespeedApiKey();
 
-  console.log(`[ImageGen Wavespeed] Submitting GPT Image 2 text-to-image prompt: "${prompt.slice(0, 60)}..."`);
+  console.log(`[ImageGen Wavespeed] Submitting Z-Image Turbo 16:9 text-to-image prompt: "${prompt.slice(0, 60)}..."`);
 
-  // 1. POST request to Wavespeed GPT Image 2 endpoint
+  // 1. POST request to Wavespeed Z-Image Turbo endpoint with 16:9 target size
   const initResponse = await fetch(
-    "https://api.wavespeed.ai/api/v3/openai/gpt-image-2/text-to-image",
+    "https://api.wavespeed.ai/api/v3/wavespeed-ai/z-image/turbo",
     {
       method: "POST",
       headers: {
@@ -34,8 +81,10 @@ export async function generateShotImage(prompt: string): Promise<string> {
       },
       body: JSON.stringify({
         prompt,
-        size: "1024x1024",
-        quality: "medium",
+        size: "1280*720",
+        strength: 0.6,
+        seed: -1,
+        output_format: "jpeg",
       }),
     }
   );
@@ -123,10 +172,13 @@ export async function generateShotImage(prompt: string): Promise<string> {
       }
 
       const arrayBuffer = await imgRes.arrayBuffer();
-      const imageBuffer = Buffer.from(arrayBuffer);
-      const fileName = `img_${Date.now()}_${Math.random().toString(36).substring(7)}.png`;
+      const rawImageBuffer = Buffer.from(arrayBuffer);
+      const fileName = `img_${Date.now()}_${Math.random().toString(36).substring(7)}.jpeg`;
 
-      const savedUrl = await saveGeneratedFile(imageBuffer, fileName, "images", "image/png");
+      // 4. Ensure strictly 16:9 (1920x1080) output dimensions without distortion
+      const finalImageBuffer = await normalizeImageTo16x9(rawImageBuffer, fileName);
+
+      const savedUrl = await saveGeneratedFile(finalImageBuffer, fileName, "images", "image/jpeg");
 
       // Verify file on disk and log file size in bytes using fs.statSync
       const diskPath = path.join(process.cwd(), "public", "generated", "images", fileName);
@@ -135,7 +187,7 @@ export async function generateShotImage(prompt: string): Promise<string> {
         const stats = fs.statSync(diskPath);
         fileSize = stats.size;
       } catch {
-        fileSize = imageBuffer.byteLength;
+        fileSize = finalImageBuffer.byteLength;
       }
 
       console.log(

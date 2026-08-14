@@ -36,6 +36,7 @@ export interface ProjectAnalysis {
   report: string;
   suggestions: string[] | string;
   style_bible?: StyleBible;
+  render_error?: string;
 }
 
 export interface WordTimestamp {
